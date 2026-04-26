@@ -214,8 +214,8 @@ input:checked+.tslider:before{transform:translateX(16px)}
   <div class="logo">⬆ ProUpscaler</div>
   <div class="badges">
     <span class="badge b-device" id="devBadge">—</span>
-    <span class="badge b-model" id="cfBadge">CodeFormer</span>
-    <span class="badge b-model" id="esrBadge">ESRGAN</span>
+    <span class="badge b-model" id="cfBadge">GFPGAN</span>
+    <span class="badge b-model" id="datBadge">PRO DAT</span>
     <span class="badge b-gem" id="gemBadge" onclick="toggleGemPanel()">✦ Gemini</span>
   </div>
 </header>
@@ -225,32 +225,54 @@ input:checked+.tslider:before{transform:translateX(16px)}
 <!-- ── Sidebar ──────────────────────────────────────────────────────────── -->
 <aside class="sidebar">
 
-  <!-- Model -->
+  <!-- Modo -->
   <div>
-    <div class="sl">Modelo AI</div>
-    <div class="mcards">
-      <label class="mc active" id="mc-codeformer">
-        <input type="radio" name="model" value="codeformer" checked>
-        <div class="mc-top"><div class="mc-dot"></div>
-          <div class="mc-name">CodeFormer <span style="font-size:8px;color:var(--green)">★</span></div>
-        </div>
-        <div class="mc-sub">SOTA 2025 · Face + fondo ESRGAN · w=0.7</div>
-      </label>
-      <label class="mc" id="mc-codeformer_hq">
-        <input type="radio" name="model" value="codeformer_hq">
-        <div class="mc-top"><div class="mc-dot"></div><div class="mc-name">CodeFormer HQ</div></div>
-        <div class="mc-sub">Máxima restauración · w=0.5 · puede cambiar identidad</div>
-      </label>
-      <label class="mc" id="mc-realesrgan_x4">
-        <input type="radio" name="model" value="realesrgan_x4">
-        <div class="mc-top"><div class="mc-dot"></div><div class="mc-name">ESRGAN 4×</div></div>
-        <div class="mc-sub">Upscaling puro sin face-restore · muy rápido</div>
-      </label>
-      <label class="mc" id="mc-realesrgan_x2">
-        <input type="radio" name="model" value="realesrgan_x2">
-        <div class="mc-top"><div class="mc-dot"></div><div class="mc-name">ESRGAN 2×</div></div>
-        <div class="mc-sub">2× escala · para fotos ya buenas</div>
-      </label>
+    <div class="sl">Modo de Restauración</div>
+    <select id="wfSel">
+      <option value="gfpgan">GFPGAN Clásico</option>
+      <option value="pro" selected>PRO Edition (DAT)</option>
+    </select>
+  </div>
+
+  <div class="divider"></div>
+
+  <!-- Rostros -->
+  <div id="gfpganControls" class="hidden">
+    <div>
+      <div class="sl">Fidelidad del Rostro</div>
+      <input type="range" id="fidR" min="0.1" max="1.0" step="0.1" value="0.5">
+      <div class="tile-row">
+        <span style="color:var(--muted)">0.1 (IA)</span>
+        <span id="fidV" style="color:var(--accent2);font-weight:600">0.5</span>
+        <span style="color:var(--muted)">1.0 (Real)</span>
+      </div>
+    </div>
+
+    <div class="divider"></div>
+
+    <!-- Fondo -->
+    <div>
+      <div class="sl">Fondo Complejo</div>
+      <div class="tog-row">
+        <span style="color:var(--muted);font-size:10px;line-height:1.3;max-width:140px">
+          Mejorar fondo con IA (Mucho más lento).
+        </span>
+        <label class="tog">
+          <input type="checkbox" id="bgTog">
+          <span class="tslider"></span>
+        </label>
+      </div>
+    </div>
+  </div>
+
+  <!-- PRO Controls -->
+  <div id="proControls">
+    <div class="sl">Nitidez (Sharpen)</div>
+    <input type="range" id="sharpR" min="0.0" max="0.45" step="0.05" value="0.25">
+    <div class="tile-row">
+      <span style="color:var(--muted)">Suave</span>
+      <span id="sharpV" style="color:var(--accent2);font-weight:600">0.25</span>
+      <span style="color:var(--muted)">Alto</span>
     </div>
   </div>
 
@@ -260,8 +282,8 @@ input:checked+.tslider:before{transform:translateX(16px)}
   <div>
     <div class="sl">Escala</div>
     <div class="srow">
-      <button class="sbtn" data-s="2">2×</button>
-      <button class="sbtn active" data-s="4">4×</button>
+      <button class="sbtn active" data-s="2">2×</button>
+      <button class="sbtn" data-s="4">4×</button>
     </div>
   </div>
 
@@ -337,7 +359,8 @@ input:checked+.tslider:before{transform:translateX(16px)}
       <span class="gp-st" id="gpSt">Procesando…</span>
       <span style="color:var(--muted);font-size:10px" id="gpCt">0/0</span>
     </div>
-    <div class="gp-bg"><div class="gp-bar" id="gpBar"></div></div>
+    <div class="gp-bg" style="margin-bottom:10px"><div class="gp-bar" id="gpBar"></div></div>
+    <button id="cancelBtn" class="rbtn" style="width:100%;color:var(--red);border-color:rgba(239,68,68,0.3);justify-content:center;display:flex;align-items:center;">🛑 Cancelar Procesamiento</button>
   </div>
 
   <!-- Log panel -->
@@ -371,8 +394,11 @@ const S = {
   files: [],     // {file_id, original_name, size, dimensions, gemini?}
   jobId: null,
   poll:  null,
-  scale: 4,
-  model: 'codeformer',
+  scale: 2,
+  fidelity: 0.5,
+  bgEnhance: false,
+  workflow: 'pro',
+  sharpenAlpha: 0.25,
   fmt:   'jpeg',
   tile:  512,
   gemKey: '',
@@ -388,8 +414,8 @@ async function init() {
   try {
     const r = await fetch('/api/info').then(r => r.json());
     $('devBadge').textContent = r.device.toUpperCase();
-    setBadge('cfBadge',  r.models.codeformer,    'CodeFormer');
-    setBadge('esrBadge', r.models.realesrgan_x4, 'ESRGAN');
+    setBadge('cfBadge',  r.models.gfpgan,    'GFPGAN');
+    setBadge('datBadge', r.models.pro_dat,   'PRO DAT');
     if (r.gemini_ready) $('gemBadge').textContent = '✦ Gemini ✓';
   } catch(e) { $('devBadge').textContent = 'OFFLINE'; }
 }
@@ -465,21 +491,27 @@ async function analyzeWithGemini(f) {
     f.gemini = g;
 
     // Auto-apply recommendations
-    if (g.recommended_model) applyModel(g.recommended_model);
+    if (g.recommended_fidelity !== undefined) applyFidelity(g.recommended_fidelity);
     if (g.recommended_scale) applyScale(g.recommended_scale);
+    if (g.bg_enhance !== undefined) applyBgEnhance(g.bg_enhance);
 
     // Show in file item
     if (metaEl) {
-      metaEl.textContent = `✦ ${g.notes || ''} → ${g.recommended_model} ${g.recommended_scale}×`;
+      metaEl.textContent = `✦ ${g.notes || ''} → Fid: ${g.recommended_fidelity} | Fondo: ${g.bg_enhance?'Sí':'No'}`;
     }
   } catch(e) {
     if (metaEl) metaEl.textContent = `✦ Gemini error: ${e.message}`;
   }
 }
 
-function applyModel(model) {
-  const radio = document.querySelector(`input[value="${model}"]`);
-  if (radio) { radio.checked = true; S.model = model; syncModelCards(); }
+function applyFidelity(val) {
+  S.fidelity = parseFloat(val);
+  $('fidR').value = S.fidelity;
+  $('fidV').textContent = S.fidelity;
+}
+function applyBgEnhance(val) {
+  S.bgEnhance = !!val;
+  $('bgTog').checked = S.bgEnhance;
 }
 function applyScale(scale) {
   document.querySelectorAll('.sbtn').forEach(b => {
@@ -533,13 +565,22 @@ function clearQ() {
 function updateQTitle() { $('qTitle').textContent = `Cola (${S.files.length})`; }
 
 // ─── Settings ─────────────────────────────────────────────────────────────
-document.querySelectorAll('[name=model]').forEach(r => r.addEventListener('change', () => {
-  S.model = r.value; syncModelCards();
-}));
-function syncModelCards() {
-  document.querySelectorAll('.mc').forEach(c => c.classList.remove('active'));
-  $(`mc-${S.model}`)?.classList.add('active');
-}
+$('fidR').addEventListener('input', e => {
+  S.fidelity = parseFloat(e.target.value);
+  $('fidV').textContent = S.fidelity.toFixed(1);
+});
+$('bgTog').addEventListener('change', e => {
+  S.bgEnhance = e.target.checked;
+});
+$('wfSel').addEventListener('change', e => {
+  S.workflow = e.target.value;
+  $('gfpganControls').classList.toggle('hidden', S.workflow !== 'gfpgan');
+  $('proControls').classList.toggle('hidden', S.workflow !== 'pro');
+});
+$('sharpR').addEventListener('input', e => {
+  S.sharpenAlpha = parseFloat(e.target.value);
+  $('sharpV').textContent = S.sharpenAlpha.toFixed(2);
+});
 
 document.querySelectorAll('.sbtn').forEach(b => b.addEventListener('click', () => {
   document.querySelectorAll('.sbtn').forEach(x => x.classList.remove('active'));
@@ -561,6 +602,8 @@ async function startJob() {
   S.processing  = true;
   S.jobStart    = Date.now();
   $('procBtn').disabled = true;
+  $('cancelBtn').disabled = false;
+  $('cancelBtn').textContent = '🛑 Cancelar Procesamiento';
 
   // Reset UI
   $('resSec').classList.add('hidden');
@@ -576,7 +619,9 @@ async function startJob() {
       headers:{'Content-Type':'application/json'},
       body: JSON.stringify({
         file_ids: S.files.map(f => f.file_id),
-        model: S.model, outscale: S.scale,
+        fidelity: S.fidelity, bg_enhance: S.bgEnhance,
+        workflow: S.workflow, sharpen_alpha: S.sharpenAlpha,
+        outscale: S.scale,
         out_fmt: S.fmt, tile: S.tile,
       })
     });
@@ -637,11 +682,11 @@ function updateProgress(job) {
     const err = $(`err-${f.file_id}`);
     if (!el) return;
 
-    el.className = 'fi ' + {completed:'done', error:'err', processing:'proc'}[f.status] || '';
-    if (stEl) stEl.textContent = {completed:'✅', error:'❌', processing:'⚡', queued:'⏳'}[f.status] || '⏳';
+    el.className = 'fi ' + {completed:'done', error:'err', processing:'proc', cancelled:'err'}[f.status] || '';
+    if (stEl) stEl.textContent = {completed:'✅', error:'❌', processing:'⚡', queued:'⏳', cancelled:'🛑'}[f.status] || '⏳';
     if (pb) {
-      pb.style.width = {completed:'100%', error:'100%', processing:'65%', queued:'0%'}[f.status] || '0%';
-      if (f.status === 'error') pb.style.background = 'var(--red)';
+      pb.style.width = {completed:'100%', error:'100%', processing:'65%', queued:'0%', cancelled:'100%'}[f.status] || '0%';
+      if (f.status === 'error' || f.status === 'cancelled') pb.style.background = 'var(--red)';
     }
     if (err) {
       if (f.error) { err.textContent = '⚠ ' + f.error; err.classList.remove('hidden'); }
@@ -652,11 +697,24 @@ function updateProgress(job) {
 
 function onDone(job) {
   const elapsed = ((Date.now() - S.jobStart) / 1000).toFixed(1);
-  $('gpSt').textContent = `Completado — ${job.completed} ok / ${job.errors} errores — ${elapsed}s`;
+  const cancelText = job.cancelled ? ' [CANCELADO]' : '';
+  $('gpSt').textContent = `Completado${cancelText} — ${job.completed} ok / ${job.errors} errores — ${elapsed}s`;
   buildResults(job);
   S.processing = false;
   $('procBtn').disabled = false;
+  $('cancelBtn').disabled = true;
 }
+
+// ─── Cancelation ──────────────────────────────────────────────────────────
+$('cancelBtn')?.addEventListener('click', async () => {
+  if (S.jobId && S.processing) {
+    try {
+      $('cancelBtn').disabled = true;
+      $('cancelBtn').textContent = 'Cancelando...';
+      await fetch(`/api/jobs/${S.jobId}/cancel`, {method: 'POST'});
+    } catch(e) {}
+  }
+});
 
 // ─── Results ──────────────────────────────────────────────────────────────
 function buildResults(job) {
@@ -666,7 +724,7 @@ function buildResults(job) {
   job.files.forEach(f => {
     if (f.status === 'completed') {
       grid.appendChild(makeCard(job.job_id, f));
-    } else if (f.status === 'error') {
+    } else if (f.status === 'error' || f.status === 'cancelled') {
       const d = document.createElement('div');
       d.className = 'err-card';
       d.innerHTML = `<div class="err-card-name">❌ ${f.original_name}</div>

@@ -99,6 +99,115 @@ def get_device() -> str:
 DEVICE = get_device()
 # MPS tiene soporte limitado — usar CPU para inferencia
 INFER_DEVICE = "cpu" if DEVICE == "mps" else DEVICE
+#!/usr/bin/env python3
+"""
+ProUpscaler v3.0
+Stack: FastAPI + Spandrel (Python 3.13 compatible) + Gemini AI
+Sin basicsr. Sin dependencias rotas.
+"""
+
+import os, uuid, shutil, zipfile, threading, traceback, json, time, base64, logging
+from pathlib import Path
+from typing import Dict, List, Any
+from concurrent.futures import ThreadPoolExecutor
+
+import uvicorn
+from fastapi import FastAPI, UploadFile, File, BackgroundTasks, HTTPException, Request
+from fastapi.responses import FileResponse, JSONResponse, HTMLResponse
+from fastapi.middleware.cors import CORSMiddleware
+
+# ─── Directorios ─────────────────────────────────────────────────────────────
+BASE_DIR   = Path(__file__).parent
+STATIC_DIR = BASE_DIR / "static"
+MODELS_DIR = BASE_DIR / "models"
+UPLOAD_DIR = BASE_DIR / "uploads"
+OUTPUT_DIR = BASE_DIR / "output"
+THUMBS_DIR = BASE_DIR / "thumbs"
+for d in [STATIC_DIR, MODELS_DIR, UPLOAD_DIR, OUTPUT_DIR, THUMBS_DIR]:
+    d.mkdir(parents=True, exist_ok=True)
+
+# ─── App ─────────────────────────────────────────────────────────────────────
+app = FastAPI(title="ProUpscaler", version="3.0.0")
+app.add_middleware(CORSMiddleware,
+    allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
+
+jobs:           Dict[str, Any] = {}
+uploaded_files: Dict[str, Any] = {}
+jobs_lock = threading.Lock()
+ALLOWED_EXTS = {".jpg", ".jpeg", ".png", ".webp", ".bmp", ".tiff", ".tif"}
+
+class JobCancelledException(Exception): pass
+
+def check_cancel(job_id: str):
+    if job_id:
+        with jobs_lock:
+            if jobs.get(job_id, {}).get("cancelled"):
+                raise JobCancelledException("Proceso cancelado por el usuario")
+
+# Gemini key (persiste en memoria de sesión)
+_gemini_key: str = ""
+
+# ─── Housekeeper (Limpieza Automática) ───────────────────────────────────────
+def cleanup_old_files(max_age_hours: int = 12):
+    """Elimina archivos de uploads, output y thumbs que tengan más de X horas."""
+    now = time.time()
+    max_age_sec = max_age_hours * 3600
+    cleaned_count = 0
+    
+    for folder in [UPLOAD_DIR, OUTPUT_DIR, THUMBS_DIR]:
+        if not folder.exists(): continue
+        for item in folder.iterdir():
+            try:
+                # Si es un directorio (como en OUTPUT_DIR/job_id) o un archivo
+                mtime = item.stat().st_mtime
+                if (now - mtime) > max_age_sec:
+                    if item.is_dir():
+                        shutil.rmtree(item, ignore_errors=True)
+                    else:
+                        item.unlink(missing_ok=True)
+                    cleaned_count += 1
+            except Exception:
+                pass
+    if cleaned_count:
+        print(f"  🧹 Housekeeper: {cleaned_count} archivos/carpetas antiguos eliminados.")
+
+def start_housekeeper():
+    """Lanza el hilo de limpieza periódica."""
+    def run_forever():
+        while True:
+            cleanup_old_files(max_age_hours=12)
+            time.sleep(3600) # Ejecutar cada hora
+            
+    t = threading.Thread(target=run_forever, daemon=True)
+    t.start()
+
+# ─── Logging por job ─────────────────────────────────────────────────────────
+def jlog(job_id: str, level: str, msg: str):
+    """Agrega un mensaje de log al job y lo imprime en consola."""
+    ts = time.strftime("%H:%M:%S")
+    entry = {"ts": ts, "level": level, "msg": msg}
+    with jobs_lock:
+        if job_id in jobs:
+            jobs[job_id].setdefault("logs", []).append(entry)
+    icon = {"info": "ℹ", "ok": "✅", "warn": "⚠️", "error": "❌"}.get(level, "·")
+    print(f"[{ts}] {icon} [{job_id[:8]}] {msg}")
+
+
+# ─── Dispositivo ─────────────────────────────────────────────────────────────
+def get_device() -> str:
+    try:
+        import torch
+        if torch.cuda.is_available():
+            return "cuda"
+        if hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
+            return "mps"
+    except ImportError:
+        pass
+    return "cpu"
+
+DEVICE = get_device()
+# MPS tiene soporte limitado — usar CPU para inferencia
+INFER_DEVICE = "cpu" if DEVICE == "mps" else DEVICE
 
 # Límite de resolución de salida (evitar OOM / procesos eternos en CPU)
 MAX_OUT_DIM = 4096  # px en el lado mayor
@@ -107,9 +216,11 @@ MAX_OUT_DIM = 4096  # px en el lado mayor
 # ─── Modelos disponibles ──────────────────────────────────────────────────────
 def check_models() -> Dict[str, bool]:
     return {
-        "codeformer":    (MODELS_DIR / "codeformer.pth").exists(),
+        "gfpgan":        (MODELS_DIR / "GFPGANv1.4.pth").exists(),
         "realesrgan_x4": (MODELS_DIR / "RealESRGAN_x4plus.pth").exists(),
         "realesrgan_x2": (MODELS_DIR / "RealESRGAN_x2plus.pth").exists(),
+        "pro_dat":       (MODELS_DIR / "4xFaceUpDAT.pth").exists(),
+        "pro_skin":      (MODELS_DIR / "1x-ITF-SkinDiffDetail-Lite-v1.pth").exists(),
     }
 
 
@@ -224,6 +335,7 @@ def tile_process(img_t, model, tile: int = 512, pad: int = 16,
             y0, y1 = max(y - pad, 0), min(y + tile + pad, h)
             x0, x1 = max(x - pad, 0), min(x + tile + pad, w)
             chunk = img_t[:, :, y0:y1, x0:x1].to(dev)
+            check_cancel(job_id)
             with torch.no_grad():
                 chunk_out = model(chunk)
             oy0, oy1 = y * scale, min((y + tile) * scale, oh)
@@ -305,26 +417,30 @@ class _ESRGANWrapper:
         return out, None
 
 
-def run_codeformer(job_id: str, input_path: Path, output_path: Path,
-                   outscale: int, tile: int, fidelity: float = 0.7):
+def run_face_restoration(job_id: str, input_path: Path, output_path: Path,
+                         outscale: int, tile: int, fidelity: float, bg_enhance: bool):
     import cv2, torch
+    import numpy as np
 
     device = torch.device(INFER_DEVICE)
 
-    # ── Cargar CodeFormer ────────────────────────────────────────────────────
-    jlog(job_id, "info", "Cargando CodeFormer (spandrel)…")
-    cf  = load_spandrel(MODELS_DIR / "codeformer.pth")
-    net = cf.model.to(device)
+    # ── Cargar GFPGAN ────────────────────────────────────────────────────────
+    jlog(job_id, "info", "Cargando GFPGAN (spandrel)…")
+    gfp  = load_spandrel(MODELS_DIR / "GFPGANv1.4.pth")
+    net = gfp.model.to(device)
 
     # ── Background upsampler ─────────────────────────────────────────────────
     bg_up = None
-    if (MODELS_DIR / "RealESRGAN_x4plus.pth").exists():
+    if bg_enhance and (MODELS_DIR / "RealESRGAN_x4plus.pth").exists():
         try:
             jlog(job_id, "info", "Cargando ESRGAN para fondo…")
             esrgan = load_spandrel(MODELS_DIR / "RealESRGAN_x4plus.pth")
             bg_up  = _ESRGANWrapper(esrgan, tile, job_id)
         except Exception as e:
             jlog(job_id, "warn", f"No se pudo cargar ESRGAN para fondo: {e}")
+    else:
+        if not bg_enhance:
+            jlog(job_id, "info", "Mejora de fondo desactivada (Optimización rápida).")
 
     # ── Face detection con facexlib ──────────────────────────────────────────
     jlog(job_id, "info", "Iniciando FaceRestoreHelper (facexlib)…")
@@ -354,10 +470,15 @@ def run_codeformer(job_id: str, input_path: Path, output_path: Path,
         jlog(job_id, "info", "Upscaleando fondo con ESRGAN…")
         bg_img, _ = bg_up.enhance(img, outscale=outscale)
     else:
-        bg_img = None
+        if outscale != 1:
+            jlog(job_id, "info", f"Redimensionando fondo ({outscale}x) sin IA para ahorrar tiempo…")
+            bg_img = cv2.resize(img, (int(w_in*outscale), int(h_in*outscale)), interpolation=cv2.INTER_LANCZOS4)
+        else:
+            bg_img = None
 
     face_helper.clean_all()
     face_helper.read_image(img)
+    check_cancel(job_id)
     jlog(job_id, "info", "Detectando rostros…")
     face_helper.get_face_landmarks_5(
         only_center_face=False, resize=640, eye_dist_threshold=5
@@ -367,18 +488,28 @@ def run_codeformer(job_id: str, input_path: Path, output_path: Path,
     jlog(job_id, "info", f"Rostros detectados: {n_faces}")
 
     if n_faces == 0:
-        jlog(job_id, "warn", "Sin rostros — usando ESRGAN directo")
-        run_esrgan(job_id, input_path, output_path,
-                   "RealESRGAN_x4plus.pth", outscale, tile)
+        jlog(job_id, "warn", "Sin rostros detectados. Guardando fondo mejorado.")
+        if bg_img is not None:
+            _imwrite(bg_img, output_path)
+        else:
+            _imwrite(img, output_path)
         return
 
     for i, cropped in enumerate(face_helper.cropped_faces):
+        check_cancel(job_id)
         jlog(job_id, "info", f"Restaurando rostro {i+1}/{n_faces} (fidelidad={fidelity})…")
         face_t = bgr_to_tensor(cropped, device=device)
         with torch.no_grad():
-            result = net(face_t, w=fidelity, adain=True)
+            result = net(face_t)
             out_face = result[0] if isinstance(result, (list, tuple)) else result
-        face_helper.add_restored_face(tensor_to_bgr(out_face), cropped)
+        
+        alpha = 1.0 - fidelity # 0.1 fidelity (reconstruct) -> alpha = 0.9. 1.0 fidelity (original) -> alpha = 0.0
+        restored_face = tensor_to_bgr(out_face)
+        if alpha < 1.0:
+            cropped_resized = cv2.resize(cropped, (restored_face.shape[1], restored_face.shape[0]), interpolation=cv2.INTER_LANCZOS4)
+            restored_face = cv2.addWeighted(restored_face, alpha, cropped_resized, 1.0 - alpha, 0)
+            
+        face_helper.add_restored_face(restored_face)
 
     face_helper.get_inverse_affine(None)
     restored = face_helper.paste_faces_to_input_image(upsample_img=bg_img)
@@ -389,43 +520,99 @@ def run_codeformer(job_id: str, input_path: Path, output_path: Path,
     jlog(job_id, "info", f"Guardando → {output_path.name}")
     _imwrite(restored, output_path)
     h_out, w_out = restored.shape[:2]
-    jlog(job_id, "ok", f"CodeFormer completado: {w_in}×{h_in} → {w_out}×{h_out}")
+    jlog(job_id, "ok", f"Restauración completada: {w_in}×{h_in} → {w_out}×{h_out}")
+
+
+# ─── PRO Edition (DAT + SkinDetail) ──────────────────────────────────────────
+def run_pro_workflow(job_id: str, input_path: Path, output_path: Path,
+                     outscale: int, tile: int, sharpen_alpha: float):
+    import cv2
+    jlog(job_id, "info", "Iniciando Workflow PRO 2026…")
+    
+    img = cv2.imread(str(input_path), cv2.IMREAD_UNCHANGED)
+    if img is None:
+        raise ValueError(f"No se pudo leer la imagen: {input_path.name}")
+
+    has_alpha = img.ndim == 3 and img.shape[2] == 4
+    if has_alpha:
+        alpha = img[:, :, 3]
+        img = img[:, :, :3]
+        
+    img, outscale_eff = _prepare_input(job_id, img, outscale)
+    h_in, w_in = img.shape[:2]
+    
+    # Etapa 1: 4x FaceUpDAT
+    model_dat_path = MODELS_DIR / "4xFaceUpDAT.pth"
+    if not model_dat_path.exists():
+        jlog(job_id, "warn", "4xFaceUpDAT no encontrado, usando RealESRGAN_x4plus como fallback.")
+        model_dat_path = MODELS_DIR / "RealESRGAN_x4plus.pth"
+    
+    jlog(job_id, "info", f"Etapa 1: Upscale 4x con {model_dat_path.name}…")
+    model_dat = load_spandrel(model_dat_path)
+    check_cancel(job_id)
+    img_t = bgr_to_tensor(img)
+    out_1_t = tile_process(img_t, model_dat, tile, job_id=job_id)
+    out_1 = tensor_to_bgr(out_1_t)
+    
+    # Etapa 2: 1x Skin Detail
+    model_skin_path = MODELS_DIR / "1x-ITF-SkinDiffDetail-Lite-v1.pth"
+    if model_skin_path.exists():
+        jlog(job_id, "info", "Etapa 2: Upscale 1x de detalles de piel…")
+        model_skin = load_spandrel(model_skin_path)
+        check_cancel(job_id)
+        out_1_t = bgr_to_tensor(out_1)
+        out_2_t = tile_process(out_1_t, model_skin, tile, job_id=job_id)
+        out_2 = tensor_to_bgr(out_2_t)
+    else:
+        jlog(job_id, "warn", "1x-ITF-SkinDiffDetail-Lite-v1 no encontrado, saltando etapa 2.")
+        out_2 = out_1
+        
+    # Re-escala fina (Lanczos)
+    if outscale != 4:
+        target_w = int(w_in * outscale)
+        target_h = int(h_in * outscale)
+        jlog(job_id, "info", f"Re-escalando de 4x a {outscale}x ({target_w}×{target_h}px)…")
+        out_2 = cv2.resize(out_2, (target_w, target_h), interpolation=cv2.INTER_LANCZOS4)
+        
+    # Sharpen
+    if sharpen_alpha > 0:
+        jlog(job_id, "info", f"Aplicando Sharpen (alpha={sharpen_alpha})…")
+        blur = cv2.GaussianBlur(out_2, (0, 0), sigmaX=0.85)
+        out_2 = cv2.addWeighted(out_2, 1.0 + sharpen_alpha, blur, -sharpen_alpha, 0)
+        
+    if has_alpha:
+        alpha_up = cv2.resize(alpha, (out_2.shape[1], out_2.shape[0]), interpolation=cv2.INTER_LANCZOS4)
+        import numpy as np
+        out_2 = np.dstack([out_2, alpha_up])
+
+    jlog(job_id, "info", f"Guardando → {output_path.name}")
+    _imwrite(out_2, output_path)
+    h_out, w_out = out_2.shape[:2]
+    jlog(job_id, "ok", f"PRO completado: {w_in}×{h_in} → {w_out}×{h_out}")
 
 
 # ─── Dispatcher ──────────────────────────────────────────────────────────────
-def dispatch(job_id: str, model: str, input_path: Path, output_path: Path,
-             outscale: int, tile: int):
-    if model == "codeformer":
-        try:
-            run_codeformer(job_id, input_path, output_path, outscale, tile, 0.7)
-        except Exception as e:
-            jlog(job_id, "warn", f"CodeFormer falló ({e}) — fallback a ESRGAN x4")
-            run_esrgan(job_id, input_path, output_path,
-                       "RealESRGAN_x4plus.pth", outscale, tile)
-    elif model == "codeformer_hq":
-        try:
-            run_codeformer(job_id, input_path, output_path, outscale, tile, 0.5)
-        except Exception as e:
-            jlog(job_id, "warn", f"CodeFormer HQ falló ({e}) — fallback a ESRGAN x4")
-            run_esrgan(job_id, input_path, output_path,
-                       "RealESRGAN_x4plus.pth", outscale, tile)
-    elif model == "realesrgan_x4":
-        run_esrgan(job_id, input_path, output_path,
-                   "RealESRGAN_x4plus.pth", outscale, tile)
-    elif model == "realesrgan_x2":
-        run_esrgan(job_id, input_path, output_path,
-                   "RealESRGAN_x2plus.pth", outscale, tile)
-    else:
-        raise ValueError(f"Modelo desconocido: {model}")
+def dispatch(job_id: str, input_path: Path, output_path: Path,
+             outscale: int, tile: int, fidelity: float, bg_enhance: bool,
+             workflow: str, sharpen_alpha: float):
+    try:
+        if workflow == "pro":
+            run_pro_workflow(job_id, input_path, output_path, outscale, tile, sharpen_alpha)
+        else:
+            run_face_restoration(job_id, input_path, output_path, outscale, tile, fidelity, bg_enhance)
+    except Exception as e:
+        jlog(job_id, "error", f"Restauración falló: {e}")
+        raise e
 
 
 # ─── Job runner ───────────────────────────────────────────────────────────────
 def _process_one(job_id: str, file_id: str,
-                 model: str, outscale: int, out_fmt: str, tile: int):
+                 outscale: int, out_fmt: str, tile: int, fidelity: float, bg_enhance: bool,
+                 workflow: str, sharpen_alpha: float):
     finfo = uploaded_files.get(file_id)
     if not finfo:
         return
-
+    
     inp = Path(finfo["path"])
     ext = {"jpeg": ".jpg", "png": ".png", "webp": ".webp"}.get(out_fmt, ".jpg")
     stem     = Path(finfo["original_name"]).stem
@@ -439,7 +626,7 @@ def _process_one(job_id: str, file_id: str,
                 f["status"] = "processing"; f["started_at"] = time.time()
                 break
 
-    jlog(job_id, "info", f"── Inicio: {finfo['original_name']} [{model}] {outscale}x ──")
+    jlog(job_id, "info", f"── Inicio: {finfo['original_name']} [{workflow.upper()}] {outscale}x ──")
     t0 = time.time()
 
     try:
@@ -447,7 +634,7 @@ def _process_one(job_id: str, file_id: str,
         with Image.open(inp) as im:
             orig_w, orig_h = im.size
 
-        dispatch(job_id, model, inp, out_path, outscale, tile)
+        dispatch(job_id, inp, out_path, outscale, tile, fidelity, bg_enhance, workflow, sharpen_alpha)
 
         with Image.open(out_path) as im:
             out_w, out_h = im.size
@@ -465,6 +652,15 @@ def _process_one(job_id: str, file_id: str,
 
         make_thumb(out_path, THUMBS_DIR / f"{job_id}_{file_id}_out.jpg")
         jlog(job_id, "ok", f"✓ {finfo['original_name']} — {elapsed}s")
+
+    except JobCancelledException as e:
+        jlog(job_id, "warn", f"Cancelado: {finfo['original_name']}")
+        with jobs_lock:
+            for f in jobs[job_id]["files"]:
+                if f["file_id"] == file_id:
+                    f["status"] = "cancelled"
+                    f["error"]  = str(e)
+                    break
 
     except Exception as e:
         tb = traceback.format_exc()
@@ -486,9 +682,18 @@ def run_job(job_id: str):
         jobs[job_id]["started_at"] = time.time()
     job = jobs[job_id]
     for finfo in job["files"]:
+        with jobs_lock:
+            if jobs[job_id].get("cancelled"):
+                for f in jobs[job_id]["files"]:
+                    if f["status"] == "queued":
+                        f["status"] = "cancelled"
+                        f["error"] = "Proceso cancelado por el usuario"
+                break
+
         _process_one(job_id, finfo["file_id"],
-                     job["model"], job["outscale"],
-                     job["out_fmt"], job["tile"])
+                     job["outscale"], job["out_fmt"], job["tile"],
+                     job["fidelity"], job["bg_enhance"],
+                     job.get("workflow", "gfpgan"), job.get("sharpen_alpha", 0.25))
 
     # ── Limpiar directorio vacío si ningún archivo se procesó ────────────────
     job_out_dir = OUTPUT_DIR / job_id
@@ -509,29 +714,27 @@ def run_job(job_id: str):
 
 
 # ─── Gemini Analysis ──────────────────────────────────────────────────────────
-GEMINI_PROMPT = """Analyze this photo and return ONLY a JSON object (no markdown, no explanation):
+GEMINI_PROMPT = """Analyze this portrait/model photography and return ONLY a JSON object (no markdown, no explanation):
 {
   "has_face": boolean,
   "face_count": number,
   "face_coverage_pct": number,
   "is_portrait": boolean,
-  "is_selfie": boolean,
   "is_body_shot": boolean,
   "image_quality": "low"|"medium"|"high",
   "blur_detected": boolean,
-  "recommended_model": "codeformer"|"realesrgan_x4",
   "recommended_fidelity": number,
+  "bg_enhance": boolean,
   "recommended_scale": 2|4,
   "notes": string
 }
 Rules:
-- If face clearly visible → recommended_model: "codeformer"
-- If no face → recommended_model: "realesrgan_x4"
-- Portrait/selfie (face >30% of image) → recommended_fidelity: 0.7
-- Full body (face <15%) → recommended_fidelity: 0.85
+- The app is optimized purely for restoring human faces.
+- recommended_fidelity (0.1 to 1.0): Use 0.1 to 0.4 for highly blurry/low-res faces (requires heavy AI reconstruction). Use 0.5 to 0.7 for normal restoration. Use 0.8 to 1.0 for high-quality photos where you must preserve the exact facial identity (no "wax" effect).
+- bg_enhance (boolean): Set to true ONLY if the background contains important sharp details. If the background is blurry (bokeh), solid color, or irrelevant, set to false to save processing time!
 - Blurry or low-res → recommended_scale: 4
 - Already high-res → recommended_scale: 2
-- notes: 1 concise sentence about the image and recommendation"""
+- notes: 1 concise sentence in Spanish explaining the fidelity and background decision."""
 
 
 @app.post("/api/analyze")
@@ -656,18 +859,21 @@ async def api_preview(file_id: str):
 async def api_process(request: Request, background_tasks: BackgroundTasks):
     data     = await request.json()
     file_ids = data.get("file_ids", [])
-    model    = data.get("model",    "codeformer")
     outscale = int(data.get("outscale", 4))
     out_fmt  = data.get("out_fmt",  "jpeg")
     tile     = int(data.get("tile", 512))
+    fidelity = float(data.get("fidelity", 0.5))
+    bg_enhance = bool(data.get("bg_enhance", False))
+    workflow = data.get("workflow", "gfpgan")
+    sharpen_alpha = float(data.get("sharpen_alpha", 0.25))
 
     if not file_ids:
         raise HTTPException(400, "Sin archivos")
     m = check_models()
-    if model in ("codeformer", "codeformer_hq") and not m["codeformer"]:
-        raise HTTPException(400, "Modelo CodeFormer no descargado")
-    if "realesrgan" in model and not m.get(model):
-        raise HTTPException(400, f"Modelo {model} no descargado")
+    if workflow == "gfpgan" and not m.get("gfpgan"):
+        raise HTTPException(400, "Modelo GFPGAN no descargado")
+    if workflow == "pro" and not m.get("pro_dat"):
+        raise HTTPException(400, "Modelo 4xFaceUpDAT no descargado")
 
     job_id = str(uuid.uuid4())
     files_list = [
@@ -682,8 +888,10 @@ async def api_process(request: Request, background_tasks: BackgroundTasks):
     jobs[job_id] = {
         "job_id": job_id, "status": "queued",
         "total": len(files_list), "completed": 0, "errors": 0,
-        "model": model, "outscale": outscale, "out_fmt": out_fmt, "tile": tile,
-        "files": files_list, "logs": [],
+        "outscale": outscale, "out_fmt": out_fmt, "tile": tile,
+        "fidelity": fidelity, "bg_enhance": bg_enhance,
+        "workflow": workflow, "sharpen_alpha": sharpen_alpha,
+        "files": files_list, "logs": [], "cancelled": False,
         "created_at": time.time(), "started_at": None, "finished_at": None
     }
     background_tasks.add_task(run_job, job_id)
@@ -719,6 +927,14 @@ async def api_dl_all(job_id: str):
     return FileResponse(str(zp), filename=f"upscaled_{job_id[:8]}.zip",
                         media_type="application/zip")
 
+@app.post("/api/jobs/{job_id}/cancel")
+async def api_cancel_job(job_id: str):
+    with jobs_lock:
+        if job_id in jobs:
+            jobs[job_id]["cancelled"] = True
+            return JSONResponse({"ok": True})
+    raise HTTPException(404)
+
 @app.delete("/api/jobs/{job_id}")
 async def api_del_job(job_id: str):
     if job_id not in jobs: raise HTTPException(404)
@@ -752,8 +968,11 @@ if __name__ == "__main__":
     print("╚══════════════════════════════════════════════╝")
     print(f"  🐍 Python     : {sys.version.split()[0]}")
     print(f"  🖥  Device    : {DEVICE.upper()}")
-    print(f"  🤖 CodeFormer : {'✅' if m['codeformer'] else '❌  ejecuta download_models.py'}")
-    print(f"  🤖 ESRGAN x4  : {'✅' if m['realesrgan_x4'] else '❌  ejecuta download_models.py'}")
-    print(f"  🤖 ESRGAN x2  : {'✅' if m['realesrgan_x2'] else '❌  ejecuta download_models.py'}")
+    print(f"  🤖 GFPGAN     : {'✅' if m.get('gfpgan') else '❌  ejecuta download_models.py'}")
+    print(f"  🤖 PRO DAT    : {'✅' if m.get('pro_dat') else '❌  faltan pesos en models/'}")
+    print(f"  🤖 PRO Skin   : {'✅' if m.get('pro_skin') else '❌  (opcional) faltan pesos'}")
+    print(f"  🤖 ESRGAN 4x  : {'✅' if m.get('realesrgan_x4') else '❌  ejecuta download_models.py'}")
+    print(f"  🤖 ESRGAN 2x  : {'✅' if m.get('realesrgan_x2') else '❌'}")
+    print("────────────────────────────────────────────────────────────────")
     print(f"\n  🌐 http://localhost:8765\n")
     uvicorn.run(app, host="0.0.0.0", port=8765, log_level="warning")

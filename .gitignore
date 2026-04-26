@@ -36,13 +36,11 @@ pyvenv.cfg
 .LSOverride
 
 # Project specific
-uploads/*
-output/*
-thumbs/*
-models/*.pth
-models/*.pth.tar
-models/*.pt
-!models/.gitkeep
+uploads/
+output/
+thumbs/
+models/*
+!models/put_esrgan_and_other_upscale_models_here
 
 # IDEs
 .vscode/
