@@ -1,0 +1,774 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>ProUpscaler v3</title>
+<style>
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+:root{
+  --bg:#07070e;--surface:#0f0f1a;--card:#15151f;--card2:#1c1c28;
+  --border:#252535;--accent:#7c3aed;--accent2:#a78bfa;
+  --green:#10b981;--yellow:#f59e0b;--red:#ef4444;--blue:#3b82f6;
+  --text:#e2e8f0;--muted:#64748b;--r:10px;
+}
+html,body{height:100%;overflow:hidden;background:var(--bg);color:var(--text);
+  font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;font-size:13px}
+/* ── Layout ── */
+.app{display:flex;flex-direction:column;height:100vh}
+.topbar{display:flex;align-items:center;justify-content:space-between;
+  padding:0 18px;height:50px;background:var(--surface);
+  border-bottom:1px solid var(--border);flex-shrink:0;gap:12px}
+.workspace{display:flex;flex:1;overflow:hidden}
+.sidebar{width:230px;flex-shrink:0;background:var(--surface);
+  border-right:1px solid var(--border);overflow-y:auto;
+  padding:14px 10px;display:flex;flex-direction:column;gap:14px}
+.main{flex:1;overflow-y:auto;padding:16px;display:flex;flex-direction:column;gap:14px}
+/* ── Topbar ── */
+.logo{font-size:15px;font-weight:700;background:linear-gradient(135deg,var(--accent2),#c4b5fd);
+  -webkit-background-clip:text;-webkit-text-fill-color:transparent}
+.badges{display:flex;gap:7px;align-items:center}
+.badge{padding:2px 9px;border-radius:20px;font-size:10px;font-weight:700;letter-spacing:.4px}
+.b-device{background:rgba(124,58,237,.2);color:var(--accent2);border:1px solid rgba(124,58,237,.3)}
+.b-model{background:rgba(16,185,129,.15);color:var(--green);border:1px solid rgba(16,185,129,.25)}
+.b-model.miss{background:rgba(239,68,68,.1);color:var(--red);border-color:rgba(239,68,68,.2)}
+.b-gem{background:rgba(59,130,246,.15);color:var(--blue);border:1px solid rgba(59,130,246,.25);cursor:pointer}
+/* ── Sidebar labels ── */
+.sl{font-size:9px;font-weight:700;letter-spacing:.8px;color:var(--muted);
+  text-transform:uppercase;margin-bottom:6px}
+/* ── Model cards ── */
+.mcards{display:flex;flex-direction:column;gap:5px}
+.mc{position:relative;padding:8px 10px;border-radius:var(--r);border:1px solid var(--border);
+  background:var(--card);cursor:pointer;transition:all .15s}
+.mc:hover{border-color:var(--accent)}
+.mc.active{border-color:var(--accent);background:rgba(124,58,237,.1)}
+.mc input{position:absolute;opacity:0;width:0}
+.mc-top{display:flex;align-items:center;gap:7px}
+.mc-dot{width:7px;height:7px;border-radius:50%;background:var(--border);flex-shrink:0;transition:.15s}
+.mc.active .mc-dot{background:var(--accent2)}
+.mc-name{font-size:11px;font-weight:600}
+.mc-sub{font-size:9px;color:var(--muted);margin-top:2px;line-height:1.4}
+/* ── Scale ── */
+.srow{display:flex;gap:5px}
+.sbtn{flex:1;padding:6px;border-radius:7px;border:1px solid var(--border);
+  background:var(--card);color:var(--muted);font-size:12px;font-weight:600;cursor:pointer;transition:.15s}
+.sbtn:hover{border-color:var(--accent);color:var(--text)}
+.sbtn.active{border-color:var(--accent);background:rgba(124,58,237,.15);color:var(--accent2)}
+/* ── Select / range ── */
+select{width:100%;background:var(--card2);border:1px solid var(--border);color:var(--text);
+  border-radius:7px;padding:6px 8px;outline:none;font-size:11px;-webkit-appearance:none}
+select:focus{border-color:var(--accent)}
+input[type=range]{width:100%;accent-color:var(--accent);cursor:pointer}
+.tile-row{display:flex;justify-content:space-between;margin-top:3px;font-size:9px}
+/* ── Toggle ── */
+.tog-row{display:flex;align-items:center;justify-content:space-between}
+.tog{position:relative;display:inline-block;width:34px;height:18px}
+.tog input{opacity:0;width:0}
+.tslider{position:absolute;inset:0;background:var(--border);border-radius:18px;cursor:pointer;transition:.2s}
+.tslider:before{content:'';position:absolute;left:2px;top:2px;width:14px;height:14px;
+  border-radius:50%;background:#fff;transition:.2s}
+input:checked+.tslider{background:var(--accent)}
+input:checked+.tslider:before{transform:translateX(16px)}
+/* ── Gemini panel ── */
+.gem-panel{background:rgba(59,130,246,.07);border:1px solid rgba(59,130,246,.2);
+  border-radius:var(--r);padding:10px}
+.gem-key{display:flex;gap:6px;margin-top:7px}
+.gem-key input{flex:1;background:var(--card2);border:1px solid var(--border);
+  color:var(--text);border-radius:7px;padding:5px 8px;font-size:11px;outline:none}
+.gem-key input:focus{border-color:var(--blue)}
+.gem-key button{padding:5px 10px;border-radius:7px;background:var(--blue);
+  border:none;color:#fff;font-size:11px;font-weight:600;cursor:pointer}
+/* ── Process btn ── */
+.pbtn{width:100%;padding:10px;border-radius:var(--r);border:none;
+  background:linear-gradient(135deg,var(--accent),#6d28d9);color:#fff;
+  font-size:12px;font-weight:700;cursor:pointer;transition:.2s;margin-top:auto}
+.pbtn:hover:not(:disabled){opacity:.9;transform:translateY(-1px);
+  box-shadow:0 4px 18px rgba(124,58,237,.4)}
+.pbtn:disabled{opacity:.3;cursor:not-allowed;transform:none;box-shadow:none}
+.divider{height:1px;background:var(--border)}
+/* ── Drop zone ── */
+.dz{border:2px dashed var(--border);border-radius:12px;padding:36px 20px;
+  text-align:center;cursor:pointer;transition:.2s;background:var(--surface)}
+.dz.drag{border-color:var(--accent);background:rgba(124,58,237,.05)}
+.dz.gone{display:none}
+.dz-icon{font-size:36px;margin-bottom:10px;opacity:.5}
+.dz-t{font-size:14px;font-weight:600;margin-bottom:5px}
+.dz-s{font-size:11px;color:var(--muted);margin-bottom:14px}
+.btn-br{padding:7px 18px;border-radius:7px;border:1px solid var(--accent);
+  background:transparent;color:var(--accent2);font-size:11px;font-weight:600;cursor:pointer}
+/* ── Queue ── */
+.q-hdr{display:flex;align-items:center;justify-content:space-between;margin-bottom:8px}
+.q-title{font-size:12px;font-weight:600}
+.q-acts{display:flex;gap:6px}
+.qbtn{padding:3px 10px;border-radius:6px;border:1px solid var(--border);
+  background:var(--card);color:var(--muted);font-size:10px;cursor:pointer;transition:.15s}
+.qbtn:hover{border-color:var(--accent);color:var(--text)}
+.flist{display:flex;flex-direction:column;gap:5px;max-height:280px;overflow-y:auto}
+.fi{display:flex;align-items:flex-start;gap:9px;padding:8px 9px;
+  border-radius:var(--r);border:1px solid var(--border);background:var(--card);transition:.2s}
+.fi.proc{border-color:rgba(124,58,237,.4);background:rgba(124,58,237,.05)}
+.fi.done{border-color:rgba(16,185,129,.3);background:rgba(16,185,129,.03)}
+.fi.err {border-color:rgba(239,68,68,.3);background:rgba(239,68,68,.04)}
+.fi-th{width:42px;height:42px;border-radius:6px;object-fit:cover;
+  background:var(--card2);flex-shrink:0;cursor:pointer}
+.fi-body{flex:1;min-width:0}
+.fi-name{font-size:11px;font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.fi-meta{font-size:9px;color:var(--muted);margin-top:1px}
+.fi-err-msg{font-size:9px;color:var(--red);margin-top:3px;line-height:1.4;
+  word-break:break-word;white-space:pre-wrap;max-height:50px;overflow:hidden}
+.fi-gem{font-size:9px;color:var(--blue);margin-top:2px}
+.fi-pb{height:3px;background:var(--border);border-radius:2px;margin-top:5px;overflow:hidden}
+.fi-bar{height:100%;border-radius:2px;background:linear-gradient(90deg,var(--accent),var(--accent2));
+  width:0;transition:width .3s}
+.fi-st{flex-shrink:0;font-size:16px;margin-top:12px}
+.fi-rm{flex-shrink:0;background:none;border:none;color:var(--muted);cursor:pointer;
+  font-size:12px;padding:2px 4px;border-radius:4px;margin-top:10px}
+.fi-rm:hover{color:var(--red)}
+/* ── Global progress ── */
+.gp{background:var(--card);border:1px solid var(--border);border-radius:var(--r);padding:12px 14px;display:none}
+.gp.vis{display:block}
+.gp-hdr{display:flex;justify-content:space-between;margin-bottom:8px;font-size:11px}
+.gp-st{font-weight:600;color:var(--accent2)}
+.gp-bg{height:5px;background:var(--border);border-radius:3px;overflow:hidden}
+.gp-bar{height:100%;border-radius:3px;background:linear-gradient(90deg,var(--accent),var(--accent2));width:0;transition:width .4s}
+/* ── Log panel ── */
+.log-panel{background:var(--card);border:1px solid var(--border);border-radius:var(--r);overflow:hidden;display:none}
+.log-panel.vis{display:block}
+.log-hdr{display:flex;align-items:center;justify-content:space-between;
+  padding:8px 12px;background:var(--card2);cursor:pointer;border-bottom:1px solid var(--border)}
+.log-hdr-t{font-size:11px;font-weight:600}
+.log-body{height:140px;overflow-y:auto;padding:8px 10px;font-family:'SF Mono','Fira Code',monospace;
+  font-size:10px;line-height:1.6}
+.log-line{display:flex;gap:6px}
+.log-ts{color:var(--muted);flex-shrink:0}
+.log-info{color:#94a3b8}
+.log-ok{color:var(--green)}
+.log-warn{color:var(--yellow)}
+.log-error{color:var(--red)}
+/* ── Results ── */
+.res-hdr{display:flex;align-items:center;justify-content:space-between}
+.res-title{font-size:12px;font-weight:600}
+.res-acts{display:flex;gap:7px}
+.rbtn{padding:4px 12px;border-radius:6px;border:1px solid var(--border);
+  background:var(--card);color:var(--muted);font-size:10px;font-weight:600;cursor:pointer;transition:.15s}
+.rbtn:hover{border-color:var(--accent);color:var(--accent2)}
+.rbtn.pri{background:var(--accent);border-color:var(--accent);color:#fff}
+.rbtn.pri:hover{opacity:.85}
+.rgrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:12px}
+/* ── Result card ── */
+.rcard{background:var(--card);border:1px solid var(--border);border-radius:12px;
+  overflow:hidden;transition:.2s}
+.rcard:hover{border-color:var(--accent);transform:translateY(-2px);
+  box-shadow:0 6px 24px rgba(0,0,0,.3)}
+/* ── Before / After slider ── */
+.ba{position:relative;width:100%;padding-top:66.6%;overflow:hidden;
+  cursor:col-resize;user-select:none;background:#000;touch-action:none}
+.ba img{position:absolute;top:0;left:0;width:100%;height:100%;object-fit:cover;pointer-events:none}
+.ba .after{clip-path:inset(0 50% 0 0)}
+.ba-div{position:absolute;top:0;left:50%;width:2px;height:100%;
+  background:rgba(255,255,255,.85);transform:translateX(-50%)}
+.ba-handle{position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);
+  width:34px;height:34px;border-radius:50%;background:#fff;
+  display:flex;align-items:center;justify-content:center;
+  box-shadow:0 2px 10px rgba(0,0,0,.4);font-size:12px;color:#333}
+.ba-labs{position:absolute;bottom:7px;left:0;right:0;
+  display:flex;justify-content:space-between;padding:0 8px;pointer-events:none}
+.ba-lab{font-size:9px;font-weight:700;padding:2px 6px;border-radius:4px;
+  background:rgba(0,0,0,.65);letter-spacing:.5px}
+/* ── Card info ── */
+.rc-info{padding:9px 11px}
+.rc-name{font-size:11px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.rc-dims{font-size:9px;color:var(--muted);margin-top:2px}
+.rc-dims b{color:var(--accent2)}
+.rc-foot{display:flex;align-items:center;justify-content:space-between;margin-top:6px}
+.rc-time{font-size:9px;color:var(--muted)}
+.rc-dl{padding:3px 10px;border-radius:5px;background:rgba(124,58,237,.2);
+  border:1px solid var(--accent);color:var(--accent2);font-size:10px;font-weight:600;
+  cursor:pointer;text-decoration:none;display:inline-block;transition:.15s}
+.rc-dl:hover{background:var(--accent);color:#fff}
+/* ── Error card ── */
+.err-card{background:rgba(239,68,68,.06);border:1px solid rgba(239,68,68,.25);
+  border-radius:12px;padding:12px;font-size:10px;color:var(--red)}
+.err-card-name{font-weight:600;margin-bottom:4px;color:var(--text)}
+/* ── Gemini badge on card ── */
+.gem-rec{font-size:9px;background:rgba(59,130,246,.15);color:var(--blue);
+  border:1px solid rgba(59,130,246,.2);border-radius:4px;padding:1px 5px;margin-left:4px}
+/* ── Scrollbar ── */
+::-webkit-scrollbar{width:4px}
+::-webkit-scrollbar-track{background:transparent}
+::-webkit-scrollbar-thumb{background:var(--border);border-radius:3px}
+/* ── Misc ── */
+.hidden{display:none!important}
+.gem-result{font-size:9px;background:rgba(59,130,246,.1);
+  border:1px solid rgba(59,130,246,.2);border-radius:6px;
+  padding:6px 8px;margin-top:6px;color:var(--text);line-height:1.6}
+.gem-result b{color:var(--blue)}
+.spinning::after{content:'…';animation:dots 1s infinite}
+@keyframes dots{0%{content:''}33%{content:'.'}66%{content:'..'}100%{content:'...'}}
+</style>
+</head>
+<body>
+<div class="app">
+
+<!-- ── Topbar ─────────────────────────────────────────────────────────── -->
+<header class="topbar">
+  <div class="logo">⬆ ProUpscaler</div>
+  <div class="badges">
+    <span class="badge b-device" id="devBadge">—</span>
+    <span class="badge b-model" id="cfBadge">CodeFormer</span>
+    <span class="badge b-model" id="esrBadge">ESRGAN</span>
+    <span class="badge b-gem" id="gemBadge" onclick="toggleGemPanel()">✦ Gemini</span>
+  </div>
+</header>
+
+<div class="workspace">
+
+<!-- ── Sidebar ──────────────────────────────────────────────────────────── -->
+<aside class="sidebar">
+
+  <!-- Model -->
+  <div>
+    <div class="sl">Modelo AI</div>
+    <div class="mcards">
+      <label class="mc active" id="mc-codeformer">
+        <input type="radio" name="model" value="codeformer" checked>
+        <div class="mc-top"><div class="mc-dot"></div>
+          <div class="mc-name">CodeFormer <span style="font-size:8px;color:var(--green)">★</span></div>
+        </div>
+        <div class="mc-sub">SOTA 2025 · Face + fondo ESRGAN · w=0.7</div>
+      </label>
+      <label class="mc" id="mc-codeformer_hq">
+        <input type="radio" name="model" value="codeformer_hq">
+        <div class="mc-top"><div class="mc-dot"></div><div class="mc-name">CodeFormer HQ</div></div>
+        <div class="mc-sub">Máxima restauración · w=0.5 · puede cambiar identidad</div>
+      </label>
+      <label class="mc" id="mc-realesrgan_x4">
+        <input type="radio" name="model" value="realesrgan_x4">
+        <div class="mc-top"><div class="mc-dot"></div><div class="mc-name">ESRGAN 4×</div></div>
+        <div class="mc-sub">Upscaling puro sin face-restore · muy rápido</div>
+      </label>
+      <label class="mc" id="mc-realesrgan_x2">
+        <input type="radio" name="model" value="realesrgan_x2">
+        <div class="mc-top"><div class="mc-dot"></div><div class="mc-name">ESRGAN 2×</div></div>
+        <div class="mc-sub">2× escala · para fotos ya buenas</div>
+      </label>
+    </div>
+  </div>
+
+  <div class="divider"></div>
+
+  <!-- Scale -->
+  <div>
+    <div class="sl">Escala</div>
+    <div class="srow">
+      <button class="sbtn" data-s="2">2×</button>
+      <button class="sbtn active" data-s="4">4×</button>
+    </div>
+  </div>
+
+  <!-- Format -->
+  <div>
+    <div class="sl">Formato</div>
+    <select id="fmtSel">
+      <option value="jpeg">JPEG 97%</option>
+      <option value="png">PNG sin pérdida</option>
+      <option value="webp">WebP 95%</option>
+    </select>
+  </div>
+
+  <!-- Tile -->
+  <div>
+    <div class="sl">Tile size (RAM)</div>
+    <input type="range" id="tileR" min="128" max="1024" step="128" value="512">
+    <div class="tile-row">
+      <span style="color:var(--muted)">128 → menos RAM</span>
+      <span id="tileV" style="color:var(--accent2);font-weight:600">512 px</span>
+    </div>
+  </div>
+
+  <div class="divider"></div>
+
+  <!-- Process -->
+  <button class="pbtn" id="procBtn" disabled>▶ Procesar imágenes</button>
+
+</aside>
+
+<!-- ── Main ─────────────────────────────────────────────────────────────── -->
+<main class="main">
+
+  <!-- Gemini panel (toggle) -->
+  <div id="gemPanel" class="hidden">
+    <div class="gem-panel">
+      <div class="sl" style="color:var(--blue)">✦ Gemini AI — Análisis inteligente</div>
+      <div style="font-size:10px;color:var(--muted);margin-top:3px;line-height:1.5">
+        Gemini analiza cada foto y recomienda automáticamente el mejor modelo, fidelidad y escala.
+      </div>
+      <div class="gem-key">
+        <input type="password" id="gemKeyInput" placeholder="AIza... (Gemini API key)">
+        <button onclick="saveGemKey()">Guardar</button>
+      </div>
+      <div id="gemStatus" style="font-size:9px;margin-top:4px;color:var(--muted)"></div>
+    </div>
+  </div>
+
+  <!-- Drop zone -->
+  <div class="dz" id="dz">
+    <div class="dz-icon">🖼</div>
+    <div class="dz-t">Arrastra imágenes aquí</div>
+    <div class="dz-s">JPG · PNG · WebP · BMP · TIFF &nbsp;|&nbsp; Lotes ilimitados · Hasta 4K</div>
+    <button class="btn-br" id="brBtn">Explorar archivos</button>
+    <input type="file" id="fileInput" multiple accept="image/*" style="display:none">
+  </div>
+
+  <!-- Queue -->
+  <div id="qSec" class="hidden">
+    <div class="q-hdr">
+      <div class="q-title" id="qTitle">Cola (0)</div>
+      <div class="q-acts">
+        <button class="qbtn" id="addBtn">+ Añadir</button>
+        <button class="qbtn" id="clrBtn">🗑 Limpiar</button>
+      </div>
+    </div>
+    <div class="flist" id="flist"></div>
+  </div>
+
+  <!-- Global progress -->
+  <div class="gp" id="gp">
+    <div class="gp-hdr">
+      <span class="gp-st" id="gpSt">Procesando…</span>
+      <span style="color:var(--muted);font-size:10px" id="gpCt">0/0</span>
+    </div>
+    <div class="gp-bg"><div class="gp-bar" id="gpBar"></div></div>
+  </div>
+
+  <!-- Log panel -->
+  <div class="log-panel" id="logPanel">
+    <div class="log-hdr" onclick="toggleLog()">
+      <span class="log-hdr-t">🖥 Logs de procesamiento</span>
+      <span id="logArrow" style="color:var(--muted);font-size:10px">▼</span>
+    </div>
+    <div class="log-body" id="logBody"></div>
+  </div>
+
+  <!-- Results -->
+  <div id="resSec" class="hidden">
+    <div class="res-hdr" style="margin-bottom:10px">
+      <div class="res-title">Resultados</div>
+      <div class="res-acts">
+        <button class="rbtn" id="newBtn">+ Nueva sesión</button>
+        <button class="rbtn pri" id="dlAllBtn">⬇ Descargar todo</button>
+      </div>
+    </div>
+    <div class="rgrid" id="rgrid"></div>
+  </div>
+
+</main>
+</div>
+</div>
+
+<script>
+// ─── Estado ───────────────────────────────────────────────────────────────
+const S = {
+  files: [],     // {file_id, original_name, size, dimensions, gemini?}
+  jobId: null,
+  poll:  null,
+  scale: 4,
+  model: 'codeformer',
+  fmt:   'jpeg',
+  tile:  512,
+  gemKey: '',
+  logOpen: true,
+};
+
+// ─── DOM ─────────────────────────────────────────────────────────────────
+const $  = id => document.getElementById(id);
+const dz = $('dz'), flist = $('flist'), logBody = $('logBody');
+
+// ─── Init ─────────────────────────────────────────────────────────────────
+async function init() {
+  try {
+    const r = await fetch('/api/info').then(r => r.json());
+    $('devBadge').textContent = r.device.toUpperCase();
+    setBadge('cfBadge',  r.models.codeformer,    'CodeFormer');
+    setBadge('esrBadge', r.models.realesrgan_x4, 'ESRGAN');
+    if (r.gemini_ready) $('gemBadge').textContent = '✦ Gemini ✓';
+  } catch(e) { $('devBadge').textContent = 'OFFLINE'; }
+}
+function setBadge(id, ok, name) {
+  const el = $(id);
+  el.textContent = ok ? `${name} ✓` : `${name} ✗`;
+  el.classList.toggle('miss', !ok);
+}
+
+// ─── Gemini panel ─────────────────────────────────────────────────────────
+function toggleGemPanel() { $('gemPanel').classList.toggle('hidden'); }
+async function saveGemKey() {
+  const key = $('gemKeyInput').value.trim();
+  if (!key) return;
+  await fetch('/api/set-gemini-key', {method:'POST',
+    headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({key})});
+  S.gemKey = key;
+  $('gemStatus').textContent = '✅ API key guardada — el análisis se ejecutará automáticamente al subir fotos';
+  $('gemStatus').style.color = 'var(--green)';
+  $('gemBadge').textContent = '✦ Gemini ✓';
+}
+
+// ─── Drag & Drop ──────────────────────────────────────────────────────────
+dz.addEventListener('dragover', e => { e.preventDefault(); dz.classList.add('drag'); });
+dz.addEventListener('dragleave', () => dz.classList.remove('drag'));
+dz.addEventListener('drop', e => { e.preventDefault(); dz.classList.remove('drag'); handleFiles(e.dataTransfer.files); });
+dz.addEventListener('click', e => { if (e.target.tagName !== 'BUTTON') $('fileInput').click(); });
+$('brBtn').addEventListener('click', e => { e.stopPropagation(); $('fileInput').click(); });
+$('fileInput').addEventListener('change', () => handleFiles($('fileInput').files));
+$('addBtn').addEventListener('click', () => $('fileInput').click());
+$('clrBtn').addEventListener('click', clearQ);
+
+// ─── Upload ───────────────────────────────────────────────────────────────
+async function handleFiles(raw) {
+  if (!raw.length || S.processing) return;
+  const fd = new FormData();
+  [...raw].forEach(f => fd.append('files', f));
+  dz.classList.add('gone');
+  $('qSec').classList.remove('hidden');
+
+  let data;
+  try {
+    const res = await fetch('/api/upload', {method:'POST', body: fd});
+    data = await res.json();
+  } catch(e) { alert('Error al subir: ' + e); return; }
+
+  for (const f of data.files) {
+    if (S.files.find(x => x.file_id === f.file_id)) continue;
+    S.files.push(f);
+    renderItem(f);
+    // Auto-analyze with Gemini if key set
+    if (S.gemKey) analyzeWithGemini(f);
+  }
+
+  updateQTitle();
+  $('procBtn').disabled = S.files.length === 0;
+  $('fileInput').value = '';
+}
+
+// ─── Gemini analysis ──────────────────────────────────────────────────────
+async function analyzeWithGemini(f) {
+  const metaEl = $(`gem-${f.file_id}`);
+  if (metaEl) metaEl.textContent = '✦ Analizando con Gemini…';
+  try {
+    const res = await fetch('/api/analyze', {
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({file_id: f.file_id, api_key: S.gemKey})
+    });
+    if (!res.ok) throw new Error(await res.text());
+    const g = await res.json();
+    f.gemini = g;
+
+    // Auto-apply recommendations
+    if (g.recommended_model) applyModel(g.recommended_model);
+    if (g.recommended_scale) applyScale(g.recommended_scale);
+
+    // Show in file item
+    if (metaEl) {
+      metaEl.textContent = `✦ ${g.notes || ''} → ${g.recommended_model} ${g.recommended_scale}×`;
+    }
+  } catch(e) {
+    if (metaEl) metaEl.textContent = `✦ Gemini error: ${e.message}`;
+  }
+}
+
+function applyModel(model) {
+  const radio = document.querySelector(`input[value="${model}"]`);
+  if (radio) { radio.checked = true; S.model = model; syncModelCards(); }
+}
+function applyScale(scale) {
+  document.querySelectorAll('.sbtn').forEach(b => {
+    const active = parseInt(b.dataset.s) === scale;
+    b.classList.toggle('active', active);
+    if (active) S.scale = scale;
+  });
+}
+
+// ─── Render file item ─────────────────────────────────────────────────────
+function renderItem(f) {
+  const el = document.createElement('div');
+  el.className = 'fi'; el.id = `fi-${f.file_id}`;
+  const kb   = (f.size / 1024).toFixed(0);
+  const dims = f.dimensions[0] ? `${f.dimensions[0]}×${f.dimensions[1]}px` : '';
+  el.innerHTML = `
+    <img class="fi-th" src="/api/thumb/${f.file_id}" alt=""
+         onclick="window.open('/api/preview/${f.file_id}','_blank')" title="Ver original">
+    <div class="fi-body">
+      <div class="fi-name" title="${f.original_name}">${f.original_name}</div>
+      <div class="fi-meta">${kb} KB${dims ? ' · '+dims : ''}</div>
+      <div class="fi-gem" id="gem-${f.file_id}">${S.gemKey ? '✦ En cola para análisis…' : ''}</div>
+      <div class="fi-err-msg hidden" id="err-${f.file_id}"></div>
+      <div class="fi-pb"><div class="fi-bar" id="pb-${f.file_id}"></div></div>
+    </div>
+    <span class="fi-st" id="st-${f.file_id}">⏳</span>
+    <button class="fi-rm" data-id="${f.file_id}">✕</button>
+  `;
+  el.querySelector('.fi-rm').addEventListener('click', () => removeFile(f.file_id));
+  flist.appendChild(el);
+}
+
+function removeFile(fid) {
+  if (S.processing) return;
+  S.files = S.files.filter(f => f.file_id !== fid);
+  $(`fi-${fid}`)?.remove();
+  if (!S.files.length) clearQ();
+  else updateQTitle();
+  $('procBtn').disabled = S.files.length === 0;
+}
+
+function clearQ() {
+  if (S.processing) return;
+  S.files = [];
+  flist.innerHTML = '';
+  dz.classList.remove('gone');
+  $('qSec').classList.add('hidden');
+  $('procBtn').disabled = true;
+}
+
+function updateQTitle() { $('qTitle').textContent = `Cola (${S.files.length})`; }
+
+// ─── Settings ─────────────────────────────────────────────────────────────
+document.querySelectorAll('[name=model]').forEach(r => r.addEventListener('change', () => {
+  S.model = r.value; syncModelCards();
+}));
+function syncModelCards() {
+  document.querySelectorAll('.mc').forEach(c => c.classList.remove('active'));
+  $(`mc-${S.model}`)?.classList.add('active');
+}
+
+document.querySelectorAll('.sbtn').forEach(b => b.addEventListener('click', () => {
+  document.querySelectorAll('.sbtn').forEach(x => x.classList.remove('active'));
+  b.classList.add('active');
+  S.scale = parseInt(b.dataset.s);
+}));
+
+$('fmtSel').addEventListener('change', e => S.fmt = e.target.value);
+$('tileR').addEventListener('input', e => {
+  S.tile = parseInt(e.target.value);
+  $('tileV').textContent = S.tile + ' px';
+});
+
+// ─── Procesar ─────────────────────────────────────────────────────────────
+$('procBtn').addEventListener('click', startJob);
+
+async function startJob() {
+  if (S.processing || !S.files.length) return;
+  S.processing  = true;
+  S.jobStart    = Date.now();
+  $('procBtn').disabled = true;
+
+  // Reset UI
+  $('resSec').classList.add('hidden');
+  $('gp').classList.add('vis');
+  $('logPanel').classList.add('vis');
+  logBody.innerHTML = '';
+  $('gpSt').textContent = 'Enviando…';
+  $('gpBar').style.width = '0%';
+
+  try {
+    const res = await fetch('/api/process', {
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({
+        file_ids: S.files.map(f => f.file_id),
+        model: S.model, outscale: S.scale,
+        out_fmt: S.fmt, tile: S.tile,
+      })
+    });
+    const d = await res.json();
+    if (!res.ok) throw new Error(d.detail || JSON.stringify(d));
+    S.jobId = d.job_id;
+    S.poll  = setInterval(pollJob, 700);
+  } catch(e) {
+    addLog('error', 'Error al iniciar: ' + e.message);
+    S.processing = false;
+    $('procBtn').disabled = false;
+  }
+}
+
+// ─── Polling ──────────────────────────────────────────────────────────────
+let _logSeen = 0;
+async function pollJob() {
+  if (!S.jobId) return;
+  try {
+    const job = await fetch(`/api/status/${S.jobId}`).then(r => r.json());
+    syncLogs(job.logs || []);
+    updateProgress(job);
+    if (job.status === 'completed') {
+      clearInterval(S.poll); S.poll = null;
+      onDone(job);
+    }
+  } catch(e) { console.error(e); }
+}
+
+function syncLogs(logs) {
+  for (let i = _logSeen; i < logs.length; i++) addLog(logs[i].level, `[${logs[i].ts}] ${logs[i].msg}`);
+  _logSeen = logs.length;
+}
+
+function addLog(level, msg) {
+  const div = document.createElement('div');
+  div.className = `log-line`;
+  div.innerHTML = `<span class="log-${level}">${escHtml(msg)}</span>`;
+  logBody.appendChild(div);
+  logBody.scrollTop = logBody.scrollHeight;
+}
+
+function escHtml(s) { return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+
+function updateProgress(job) {
+  const done  = job.completed + job.errors;
+  const pct   = job.total ? Math.round(done / job.total * 100) : 0;
+  $('gpBar').style.width  = pct + '%';
+  $('gpCt').textContent   = `${done} / ${job.total}`;
+
+  const cur = job.files.find(f => f.status === 'processing');
+  if (cur) $('gpSt').textContent = `Procesando: ${cur.original_name}`;
+
+  job.files.forEach(f => {
+    const el  = $(`fi-${f.file_id}`);
+    const stEl = $(`st-${f.file_id}`);
+    const pb  = $(`pb-${f.file_id}`);
+    const err = $(`err-${f.file_id}`);
+    if (!el) return;
+
+    el.className = 'fi ' + {completed:'done', error:'err', processing:'proc'}[f.status] || '';
+    if (stEl) stEl.textContent = {completed:'✅', error:'❌', processing:'⚡', queued:'⏳'}[f.status] || '⏳';
+    if (pb) {
+      pb.style.width = {completed:'100%', error:'100%', processing:'65%', queued:'0%'}[f.status] || '0%';
+      if (f.status === 'error') pb.style.background = 'var(--red)';
+    }
+    if (err) {
+      if (f.error) { err.textContent = '⚠ ' + f.error; err.classList.remove('hidden'); }
+      else err.classList.add('hidden');
+    }
+  });
+}
+
+function onDone(job) {
+  const elapsed = ((Date.now() - S.jobStart) / 1000).toFixed(1);
+  $('gpSt').textContent = `Completado — ${job.completed} ok / ${job.errors} errores — ${elapsed}s`;
+  buildResults(job);
+  S.processing = false;
+  $('procBtn').disabled = false;
+}
+
+// ─── Results ──────────────────────────────────────────────────────────────
+function buildResults(job) {
+  const grid = $('rgrid');
+  grid.innerHTML = '';
+
+  job.files.forEach(f => {
+    if (f.status === 'completed') {
+      grid.appendChild(makeCard(job.job_id, f));
+    } else if (f.status === 'error') {
+      const d = document.createElement('div');
+      d.className = 'err-card';
+      d.innerHTML = `<div class="err-card-name">❌ ${f.original_name}</div>
+        <div>${f.error || 'Error desconocido'}</div>`;
+      grid.appendChild(d);
+    }
+  });
+
+  if (job.completed > 0) {
+    $('resSec').classList.remove('hidden');
+    $('resSec').scrollIntoView({behavior:'smooth'});
+  }
+}
+
+function makeCard(jobId, f) {
+  const card = document.createElement('div');
+  card.className = 'rcard';
+  const od = f.orig_size ? `${f.orig_size[0]}×${f.orig_size[1]}` : '?';
+  const nd = f.out_size  ? `${f.out_size[0]}×${f.out_size[1]}`  : '?';
+  const is4k = f.out_size && f.out_size[0] >= 3840;
+  const cid  = `ba-${f.file_id}`;
+
+  card.innerHTML = `
+    <div class="ba" id="${cid}">
+      <img src="/api/thumb/${f.file_id}" alt="antes">
+      <img class="after" id="ba-af-${f.file_id}"
+           src="/api/thumb/${jobId}/${f.file_id}/out" alt="después">
+      <div class="ba-div" id="ba-d-${f.file_id}"></div>
+      <div class="ba-handle" id="ba-h-${f.file_id}">⇔</div>
+      <div class="ba-labs">
+        <span class="ba-lab">ANTES</span>
+        <span class="ba-lab">DESPUÉS</span>
+      </div>
+    </div>
+    <div class="rc-info">
+      <div class="rc-name" title="${f.original_name}">${f.original_name}</div>
+      <div class="rc-dims">${od} → <b>${nd}</b>${is4k ? ' · <span style="color:var(--green)">4K ✓</span>' : ''}</div>
+      <div class="rc-foot">
+        <span class="rc-time">⏱ ${f.elapsed}s</span>
+        <a class="rc-dl" href="/api/download/${jobId}/${f.file_id}" download>⬇ Descargar</a>
+      </div>
+    </div>`;
+
+  // Init BA slider after DOM insert (use requestAnimationFrame)
+  setTimeout(() => initBA(cid, f.file_id), 50);
+  return card;
+}
+
+// ─── Before / After slider ────────────────────────────────────────────────
+function initBA(cid, fid) {
+  const wrap = $(cid);
+  const af   = $(`ba-af-${fid}`);
+  const div  = $(`ba-d-${fid}`);
+  const hdl  = $(`ba-h-${fid}`);
+  if (!wrap || !af) return;
+
+  let drag = false;
+  function setPos(pct) {
+    pct = Math.max(3, Math.min(97, pct));
+    af.style.clipPath = `inset(0 ${100 - pct}% 0 0)`;
+    div.style.left = hdl.style.left = pct + '%';
+  }
+  setPos(50);
+
+  wrap.addEventListener('mousedown',  e => { drag = true; move(e); });
+  wrap.addEventListener('touchstart', e => { drag = true; move(e.touches[0]); }, {passive:true});
+  window.addEventListener('mouseup',  () => drag = false);
+  window.addEventListener('touchend', () => drag = false);
+  function move(e) {
+    if (!drag) return;
+    const r = wrap.getBoundingClientRect();
+    setPos(((e.clientX - r.left) / r.width) * 100);
+  }
+  window.addEventListener('mousemove', move);
+  window.addEventListener('touchmove', e => move(e.touches[0]), {passive:true});
+}
+
+// ─── Download all ─────────────────────────────────────────────────────────
+$('dlAllBtn').addEventListener('click', () => {
+  if (S.jobId) window.location = `/api/download-all/${S.jobId}`;
+});
+
+// ─── New session ──────────────────────────────────────────────────────────
+$('newBtn').addEventListener('click', () => {
+  clearQ();
+  $('resSec').classList.add('hidden');
+  $('gp').classList.remove('vis');
+  $('logPanel').classList.remove('vis');
+  logBody.innerHTML = '';
+  _logSeen = 0;
+  S.jobId = null;
+});
+
+// ─── Log toggle ───────────────────────────────────────────────────────────
+function toggleLog() {
+  S.logOpen = !S.logOpen;
+  logBody.style.display = S.logOpen ? '' : 'none';
+  $('logArrow').textContent = S.logOpen ? '▼' : '▶';
+}
+
+// ─── Boot ─────────────────────────────────────────────────────────────────
+init();
+</script>
+</body>
+</html>

@@ -1,0 +1,28 @@
+# ── Web framework ─────────────────────────────────────────────────────────────
+fastapi>=0.104.0
+uvicorn[standard]>=0.24.0
+python-multipart>=0.0.6
+
+# ── Image ─────────────────────────────────────────────────────────────────────
+Pillow>=10.4.0
+opencv-python>=4.10.0
+numpy>=1.26.0
+
+# ── PyTorch (CPU/MPS en Mac — cambia cu121 si tienes GPU NVIDIA) ──────────────
+torch>=2.2.0
+torchvision>=0.17.0
+
+# ── Spandrel: carga ESRGAN, CodeFormer, SwinIR… sin basicsr ──────────────────
+spandrel>=0.4.0
+einops>=0.7.0
+timm>=0.9.16
+
+# ── Face detection (para CodeFormer pipeline) ─────────────────────────────────
+facexlib>=0.3.0
+
+# ── Gemini API (inteligencia automática) ──────────────────────────────────────
+google-generativeai>=0.7.0
+
+# ── Utilidades ────────────────────────────────────────────────────────────────
+requests>=2.31.0
+tqdm>=4.66.0

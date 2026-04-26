@@ -1,0 +1,49 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# Virtual Environment
+.venv/
+venv/
+ENV/
+env/
+pyvenv.cfg
+.env
+
+# MacOS
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# Project specific
+uploads/*
+output/*
+thumbs/*
+models/*.pth
+models/*.pth.tar
+models/*.pt
+!models/.gitkeep
+
+# IDEs
+.vscode/
+.idea/
