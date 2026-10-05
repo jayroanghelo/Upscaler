@@ -12,12 +12,12 @@ numpy>=1.26.0
 torch>=2.2.0
 torchvision>=0.17.0
 
-# ── Spandrel: carga ESRGAN, CodeFormer, SwinIR… sin basicsr ──────────────────
+# ── Spandrel: carga GFPGAN, ESRGAN, DAT y otros modelos sin basicsr ──────────
 spandrel>=0.4.0
 einops>=0.7.0
 timm>=0.9.16
 
-# ── Face detection (para CodeFormer pipeline) ─────────────────────────────────
+# ── Face detection / restauración facial ───────────────────────────────────────
 facexlib>=0.3.0
 
 # ── Gemini API (inteligencia automática) ──────────────────────────────────────

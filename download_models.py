@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 Model downloader for ProUpscaler
-Downloads GFPGAN v1.4 and Real-ESRGAN x2/x4 weights
+Downloads the model weights used by the default GFPGAN workflow
 """
 
 import os
@@ -14,11 +14,6 @@ MODELS_DIR = Path(__file__).parent / "models"
 MODELS_DIR.mkdir(exist_ok=True)
 
 MODELS = {
-    "codeformer.pth": {
-        "url": "https://github.com/sczhou/CodeFormer/releases/download/v0.1.0/codeformer.pth",
-        "size_mb": 375,
-        "description": "CodeFormer — SOTA face restoration 2024-2025 (recomendado)"
-    },
     "GFPGANv1.4.pth": {
         "url": "https://github.com/TencentARC/GFPGAN/releases/download/v1.3.4/GFPGANv1.4.pth",
         "size_mb": 332,
@@ -28,11 +23,6 @@ MODELS = {
         "url": "https://github.com/xinntao/Real-ESRGAN/releases/download/v0.1.0/RealESRGAN_x4plus.pth",
         "size_mb": 67,
         "description": "Real-ESRGAN x4 — Upscaling general + fondo 4x"
-    },
-    "RealESRGAN_x2plus.pth": {
-        "url": "https://github.com/xinntao/Real-ESRGAN/releases/download/v0.2.1/RealESRGAN_x2plus.pth",
-        "size_mb": 67,
-        "description": "Real-ESRGAN x2 — Upscaling general 2x (más rápido)"
     },
 }
 
