@@ -24,11 +24,6 @@ MODELS = {
         "size_mb": 67,
         "description": "Real-ESRGAN x4 — Upscaling general + fondo 4x"
     },
-    "RealESRGAN_x2plus.pth": {
-        "url": "https://github.com/xinntao/Real-ESRGAN/releases/download/v0.2.1/RealESRGAN_x2plus.pth",
-        "size_mb": 67,
-        "description": "Real-ESRGAN x2 — Upscaling general 2x (más rápido)"
-    },
 }
 
 

@@ -148,11 +148,10 @@ Los pesos no se incluyen en Git.
 python download_models.py
 ```
 
-El helper descarga:
+El helper descarga únicamente los pesos necesarios para el workflow base:
 
 - `GFPGANv1.4.pth`
 - `RealESRGAN_x4plus.pth`
-- `RealESRGAN_x2plus.pth`
 
 ### Modelos PRO
 

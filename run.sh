@@ -63,7 +63,7 @@ echo "  📥 Actualizando pip..."
 "$PIP" install --quiet --upgrade pip setuptools wheel
 
 echo "  📥 Instalando dependencias (primera vez: ~5 min)..."
-# Sin basicsr — usamos spandrel (compatible Python 3.10-3.13)
+# Sin basicsr — usamos Spandrel sobre PyTorch
 "$PIP" install --quiet -r requirements.txt
 
 # google-generativeai requiere a veces instalación explícita
@@ -76,10 +76,9 @@ echo ""
 MODELS_NEEDED=0
 [ ! -f "$DIR/models/GFPGANv1.4.pth" ]         && MODELS_NEEDED=1
 [ ! -f "$DIR/models/RealESRGAN_x4plus.pth" ] && MODELS_NEEDED=1
-[ ! -f "$DIR/models/RealESRGAN_x2plus.pth" ] && MODELS_NEEDED=1
 
 if [ "$MODELS_NEEDED" = "1" ]; then
-    echo "  🤖 Descargando modelos AI (~470 MB, solo la primera vez)..."
+    echo "  🤖 Descargando modelos AI (~400 MB, solo la primera vez)..."
     "$PY" download_models.py
     echo ""
 else

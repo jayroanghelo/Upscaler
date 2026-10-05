@@ -1,14 +1,13 @@
 #!/usr/bin/env python3
 """
 ProUpscaler v3.0
-Stack: FastAPI + Spandrel (Python 3.13 compatible) + Gemini AI
-Sin basicsr. Sin dependencias rotas.
+Stack: FastAPI + Spandrel + PyTorch + Gemini AI opcional
+Python 3.10+.
 """
 
-import os, uuid, shutil, zipfile, threading, traceback, json, time, base64, logging
+import os, uuid, shutil, zipfile, threading, traceback, json, time
 from pathlib import Path
 from typing import Dict, List, Any
-from concurrent.futures import ThreadPoolExecutor
 
 import uvicorn
 from fastapi import FastAPI, UploadFile, File, BackgroundTasks, HTTPException, Request
@@ -114,7 +113,6 @@ def check_models() -> Dict[str, bool]:
     return {
         "gfpgan":        (MODELS_DIR / "GFPGANv1.4.pth").exists(),
         "realesrgan_x4": (MODELS_DIR / "RealESRGAN_x4plus.pth").exists(),
-        "realesrgan_x2": (MODELS_DIR / "RealESRGAN_x2plus.pth").exists(),
         "pro_dat":       (MODELS_DIR / "4xFaceUpDAT.pth").exists(),
         "pro_skin":      (MODELS_DIR / "1x-ITF-SkinDiffDetail-Lite-v1.pth").exists(),
     }
@@ -883,7 +881,6 @@ if __name__ == "__main__":
     print(f"  🤖 PRO DAT    : {'✅' if m.get('pro_dat') else '❌  faltan pesos en models/'}")
     print(f"  🤖 PRO Skin   : {'✅' if m.get('pro_skin') else '❌  (opcional) faltan pesos'}")
     print(f"  🤖 ESRGAN 4x  : {'✅' if m.get('realesrgan_x4') else '❌  ejecuta download_models.py'}")
-    print(f"  🤖 ESRGAN 2x  : {'✅' if m.get('realesrgan_x2') else '❌'}")
     host = os.environ.get("PROUPSCALER_HOST", "127.0.0.1")
     port = int(os.environ.get("PROUPSCALER_PORT", "8765"))
     display_host = "localhost" if host in {"127.0.0.1", "0.0.0.0"} else host
