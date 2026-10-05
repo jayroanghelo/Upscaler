@@ -13,7 +13,6 @@ from concurrent.futures import ThreadPoolExecutor
 import uvicorn
 from fastapi import FastAPI, UploadFile, File, BackgroundTasks, HTTPException, Request
 from fastapi.responses import FileResponse, JSONResponse, HTMLResponse
-from fastapi.middleware.cors import CORSMiddleware
 
 # ─── Directorios ─────────────────────────────────────────────────────────────
 BASE_DIR   = Path(__file__).parent
@@ -27,109 +26,6 @@ for d in [STATIC_DIR, MODELS_DIR, UPLOAD_DIR, OUTPUT_DIR, THUMBS_DIR]:
 
 # ─── App ─────────────────────────────────────────────────────────────────────
 app = FastAPI(title="ProUpscaler", version="3.0.0")
-app.add_middleware(CORSMiddleware,
-    allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
-
-jobs:           Dict[str, Any] = {}
-uploaded_files: Dict[str, Any] = {}
-jobs_lock = threading.Lock()
-ALLOWED_EXTS = {".jpg", ".jpeg", ".png", ".webp", ".bmp", ".tiff", ".tif"}
-
-# Gemini key (persiste en memoria de sesión)
-_gemini_key: str = ""
-
-# ─── Housekeeper (Limpieza Automática) ───────────────────────────────────────
-def cleanup_old_files(max_age_hours: int = 12):
-    """Elimina archivos de uploads, output y thumbs que tengan más de X horas."""
-    now = time.time()
-    max_age_sec = max_age_hours * 3600
-    cleaned_count = 0
-    
-    for folder in [UPLOAD_DIR, OUTPUT_DIR, THUMBS_DIR]:
-        if not folder.exists(): continue
-        for item in folder.iterdir():
-            try:
-                # Si es un directorio (como en OUTPUT_DIR/job_id) o un archivo
-                mtime = item.stat().st_mtime
-                if (now - mtime) > max_age_sec:
-                    if item.is_dir():
-                        shutil.rmtree(item, ignore_errors=True)
-                    else:
-                        item.unlink(missing_ok=True)
-                    cleaned_count += 1
-            except Exception:
-                pass
-    if cleaned_count:
-        print(f"  🧹 Housekeeper: {cleaned_count} archivos/carpetas antiguos eliminados.")
-
-def start_housekeeper():
-    """Lanza el hilo de limpieza periódica."""
-    def run_forever():
-        while True:
-            cleanup_old_files(max_age_hours=12)
-            time.sleep(3600) # Ejecutar cada hora
-            
-    t = threading.Thread(target=run_forever, daemon=True)
-    t.start()
-
-# ─── Logging por job ─────────────────────────────────────────────────────────
-def jlog(job_id: str, level: str, msg: str):
-    """Agrega un mensaje de log al job y lo imprime en consola."""
-    ts = time.strftime("%H:%M:%S")
-    entry = {"ts": ts, "level": level, "msg": msg}
-    with jobs_lock:
-        if job_id in jobs:
-            jobs[job_id].setdefault("logs", []).append(entry)
-    icon = {"info": "ℹ", "ok": "✅", "warn": "⚠️", "error": "❌"}.get(level, "·")
-    print(f"[{ts}] {icon} [{job_id[:8]}] {msg}")
-
-
-# ─── Dispositivo ─────────────────────────────────────────────────────────────
-def get_device() -> str:
-    try:
-        import torch
-        if torch.cuda.is_available():
-            return "cuda"
-        if hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
-            return "mps"
-    except ImportError:
-        pass
-    return "cpu"
-
-DEVICE = get_device()
-# MPS tiene soporte limitado — usar CPU para inferencia
-INFER_DEVICE = "cpu" if DEVICE == "mps" else DEVICE
-#!/usr/bin/env python3
-"""
-ProUpscaler v3.0
-Stack: FastAPI + Spandrel (Python 3.13 compatible) + Gemini AI
-Sin basicsr. Sin dependencias rotas.
-"""
-
-import os, uuid, shutil, zipfile, threading, traceback, json, time, base64, logging
-from pathlib import Path
-from typing import Dict, List, Any
-from concurrent.futures import ThreadPoolExecutor
-
-import uvicorn
-from fastapi import FastAPI, UploadFile, File, BackgroundTasks, HTTPException, Request
-from fastapi.responses import FileResponse, JSONResponse, HTMLResponse
-from fastapi.middleware.cors import CORSMiddleware
-
-# ─── Directorios ─────────────────────────────────────────────────────────────
-BASE_DIR   = Path(__file__).parent
-STATIC_DIR = BASE_DIR / "static"
-MODELS_DIR = BASE_DIR / "models"
-UPLOAD_DIR = BASE_DIR / "uploads"
-OUTPUT_DIR = BASE_DIR / "output"
-THUMBS_DIR = BASE_DIR / "thumbs"
-for d in [STATIC_DIR, MODELS_DIR, UPLOAD_DIR, OUTPUT_DIR, THUMBS_DIR]:
-    d.mkdir(parents=True, exist_ok=True)
-
-# ─── App ─────────────────────────────────────────────────────────────────────
-app = FastAPI(title="ProUpscaler", version="3.0.0")
-app.add_middleware(CORSMiddleware,
-    allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
 
 jobs:           Dict[str, Any] = {}
 uploaded_files: Dict[str, Any] = {}
@@ -398,7 +294,7 @@ def run_esrgan(job_id: str, input_path: Path, output_path: Path,
     jlog(job_id, "ok", f"ESRGAN completado: {w_in}×{h_in} → {w_out}×{h_out}")
 
 
-# ─── CodeFormer (con fallback automático a ESRGAN) ────────────────────────────
+# ─── Restauración facial GFPGAN (con fondo ESRGAN opcional) ─────────────────
 class _ESRGANWrapper:
     """Wrapper para usar spandrel ESRGAN como bg_upsampler de facexlib."""
     def __init__(self, model, tile, job_id=""):
@@ -406,7 +302,7 @@ class _ESRGANWrapper:
 
     def enhance(self, img, outscale=None):
         import cv2
-        # No aplica cap aquí — ya fue aplicado en run_codeformer
+        # No aplica cap aquí — la entrada ya fue limitada antes de este punto
         t   = bgr_to_tensor(img)
         out = tensor_to_bgr(tile_process(t, self.model, self.tile,
                                          job_id=self.job_id))
@@ -442,7 +338,14 @@ def run_face_restoration(job_id: str, input_path: Path, output_path: Path,
         if not bg_enhance:
             jlog(job_id, "info", "Mejora de fondo desactivada (Optimización rápida).")
 
-    # ── Face detection con facexlib ──────────────────────────────────────────
+    img = cv2.imread(str(input_path), cv2.IMREAD_COLOR)
+    if img is None:
+        raise ValueError(f"No se pudo leer: {input_path.name}")
+
+    # ── Cap resolución de salida ─────────────────────────────────────────────
+    img, outscale = _prepare_input(job_id, img, outscale)
+
+    # FaceRestoreHelper debe usar la escala efectiva después del límite 4K.
     jlog(job_id, "info", "Iniciando FaceRestoreHelper (facexlib)…")
     from facexlib.utils.face_restoration_helper import FaceRestoreHelper
     face_helper = FaceRestoreHelper(
@@ -454,13 +357,6 @@ def run_face_restoration(job_id: str, input_path: Path, output_path: Path,
         use_parse=True,
         device=device,
     )
-
-    img = cv2.imread(str(input_path), cv2.IMREAD_COLOR)
-    if img is None:
-        raise ValueError(f"No se pudo leer: {input_path.name}")
-
-    # ── Cap resolución de salida ─────────────────────────────────────────────
-    img, outscale = _prepare_input(job_id, img, outscale)
 
     h_in, w_in = img.shape[:2]
     jlog(job_id, "info", f"Imagen (tras cap): {w_in}×{h_in}px → salida ≈ {w_in*outscale}×{h_in*outscale}px")
@@ -567,11 +463,11 @@ def run_pro_workflow(job_id: str, input_path: Path, output_path: Path,
         jlog(job_id, "warn", "1x-ITF-SkinDiffDetail-Lite-v1 no encontrado, saltando etapa 2.")
         out_2 = out_1
         
-    # Re-escala fina (Lanczos)
-    if outscale != 4:
-        target_w = int(w_in * outscale)
-        target_h = int(h_in * outscale)
-        jlog(job_id, "info", f"Re-escalando de 4x a {outscale}x ({target_w}×{target_h}px)…")
+    # Re-escala fina (Lanczos). Usa la escala efectiva calculada por el límite 4K.
+    if outscale_eff != 4:
+        target_w = int(w_in * outscale_eff)
+        target_h = int(h_in * outscale_eff)
+        jlog(job_id, "info", f"Re-escalando de 4x a {outscale_eff}x ({target_w}×{target_h}px)…")
         out_2 = cv2.resize(out_2, (target_w, target_h), interpolation=cv2.INTER_LANCZOS4)
         
     # Sharpen
@@ -869,6 +765,18 @@ async def api_process(request: Request, background_tasks: BackgroundTasks):
 
     if not file_ids:
         raise HTTPException(400, "Sin archivos")
+    if outscale not in (2, 4):
+        raise HTTPException(400, "Escala no válida: usa 2x o 4x")
+    if out_fmt not in {"jpeg", "png", "webp"}:
+        raise HTTPException(400, "Formato de salida no válido")
+    if tile not in {128, 256, 384, 512, 640, 768, 896, 1024}:
+        raise HTTPException(400, "Tile size no válido")
+    if workflow not in {"gfpgan", "pro"}:
+        raise HTTPException(400, "Workflow no válido")
+    if not 0.1 <= fidelity <= 1.0:
+        raise HTTPException(400, "Fidelidad fuera de rango")
+    if not 0.0 <= sharpen_alpha <= 0.45:
+        raise HTTPException(400, "Sharpen fuera de rango")
     m = check_models()
     if workflow == "gfpgan" and not m.get("gfpgan"):
         raise HTTPException(400, "Modelo GFPGAN no descargado")
@@ -885,6 +793,9 @@ async def api_process(request: Request, background_tasks: BackgroundTasks):
          "out_size": None, "elapsed": None}
         for fid in file_ids if fid in uploaded_files
     ]
+    if not files_list:
+        raise HTTPException(400, "Ninguno de los archivos solicitados existe en esta sesión")
+
     jobs[job_id] = {
         "job_id": job_id, "status": "queued",
         "total": len(files_list), "completed": 0, "errors": 0,
@@ -973,6 +884,9 @@ if __name__ == "__main__":
     print(f"  🤖 PRO Skin   : {'✅' if m.get('pro_skin') else '❌  (opcional) faltan pesos'}")
     print(f"  🤖 ESRGAN 4x  : {'✅' if m.get('realesrgan_x4') else '❌  ejecuta download_models.py'}")
     print(f"  🤖 ESRGAN 2x  : {'✅' if m.get('realesrgan_x2') else '❌'}")
+    host = os.environ.get("PROUPSCALER_HOST", "127.0.0.1")
+    port = int(os.environ.get("PROUPSCALER_PORT", "8765"))
+    display_host = "localhost" if host in {"127.0.0.1", "0.0.0.0"} else host
     print("────────────────────────────────────────────────────────────────")
-    print(f"\n  🌐 http://localhost:8765\n")
-    uvicorn.run(app, host="0.0.0.0", port=8765, log_level="warning")
+    print(f"\n  🌐 http://{display_host}:{port}\n")
+    uvicorn.run(app, host=host, port=port, log_level="warning")

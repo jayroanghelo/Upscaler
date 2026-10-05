@@ -1,7 +1,7 @@
 #!/bin/bash
 # ╔══════════════════════════════════════════════════════════════╗
-# ║   ProUpscaler v2.0 — Script de inicio                       ║
-# ║   Compatible con Python 3.10 / 3.11 / 3.12 / 3.13          ║
+# ║   ProUpscaler v3.0 — Script de inicio                       ║
+# ║   Compatible con Python 3.10+ (3.11/3.12 recomendados)      ║
 # ║   NO usa basicsr — usa Spandrel (moderno y estable)         ║
 # ╚══════════════════════════════════════════════════════════════╝
 
@@ -11,14 +11,14 @@ cd "$DIR"
 
 echo ""
 echo "╔══════════════════════════════════════════╗"
-echo "║   ProUpscaler v2.0 — Iniciando...        ║"
+echo "║   ProUpscaler v3.0 — Iniciando...        ║"
 echo "╚══════════════════════════════════════════╝"
 echo ""
 
 # ── 1. Detectar Python compatible ─────────────────────────────────────────────
-# Preferimos 3.11 o 3.12 (estables con PyTorch/BasicSR en Mac), evitamos 3.13 si es posible
+# Preferimos 3.11 o 3.12 por compatibilidad amplia con PyTorch/Spandrel.
 PYTHON_BIN=""
-for candidate in python3.11 python3.12 python3; do
+for candidate in python3.11 python3.12 python3.10 python3; do
     if command -v "$candidate" &>/dev/null; then
         ver=$("$candidate" -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')" 2>/dev/null)
         major=$(echo "$ver" | cut -d. -f1)
@@ -74,12 +74,12 @@ echo ""
 
 # ── 4. Descargar modelos AI ────────────────────────────────────────────────────
 MODELS_NEEDED=0
-[ ! -f "$DIR/models/codeformer.pth" ]        && MODELS_NEEDED=1
+[ ! -f "$DIR/models/GFPGANv1.4.pth" ]         && MODELS_NEEDED=1
 [ ! -f "$DIR/models/RealESRGAN_x4plus.pth" ] && MODELS_NEEDED=1
 [ ! -f "$DIR/models/RealESRGAN_x2plus.pth" ] && MODELS_NEEDED=1
 
 if [ "$MODELS_NEEDED" = "1" ]; then
-    echo "  🤖 Descargando modelos AI (~510 MB, solo la primera vez)..."
+    echo "  🤖 Descargando modelos AI (~470 MB, solo la primera vez)..."
     "$PY" download_models.py
     echo ""
 else
@@ -88,9 +88,20 @@ else
 fi
 
 # ── 5. Abrir navegador y lanzar servidor ──────────────────────────────────────
-(sleep 2 && open "http://localhost:8765") &
+PORT="${PROUPSCALER_PORT:-8765}"
+URL="http://localhost:${PORT}"
 
-echo "  🚀 Servidor iniciado en http://localhost:8765"
+open_browser() {
+    if command -v open &>/dev/null; then
+        open "$URL" >/dev/null 2>&1 || true
+    elif command -v xdg-open &>/dev/null; then
+        xdg-open "$URL" >/dev/null 2>&1 || true
+    fi
+}
+
+(sleep 2 && open_browser) &
+
+echo "  🚀 Servidor iniciado en $URL"
 echo "  ⏹  Presiona Ctrl+C para detener"
 echo ""
 "$PY" app.py

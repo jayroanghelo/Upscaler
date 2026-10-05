@@ -229,15 +229,15 @@ input:checked+.tslider:before{transform:translateX(16px)}
   <div>
     <div class="sl">Modo de Restauración</div>
     <select id="wfSel">
-      <option value="gfpgan">GFPGAN Clásico</option>
-      <option value="pro" selected>PRO Edition (DAT)</option>
+      <option value="gfpgan" selected>GFPGAN Clásico</option>
+      <option value="pro">PRO Edition (DAT)</option>
     </select>
   </div>
 
   <div class="divider"></div>
 
   <!-- Rostros -->
-  <div id="gfpganControls" class="hidden">
+  <div id="gfpganControls">
     <div>
       <div class="sl">Fidelidad del Rostro</div>
       <input type="range" id="fidR" min="0.1" max="1.0" step="0.1" value="0.5">
@@ -266,7 +266,7 @@ input:checked+.tslider:before{transform:translateX(16px)}
   </div>
 
   <!-- PRO Controls -->
-  <div id="proControls">
+  <div id="proControls" class="hidden">
     <div class="sl">Nitidez (Sharpen)</div>
     <input type="range" id="sharpR" min="0.0" max="0.45" step="0.05" value="0.25">
     <div class="tile-row">
@@ -397,7 +397,7 @@ const S = {
   scale: 2,
   fidelity: 0.5,
   bgEnhance: false,
-  workflow: 'pro',
+  workflow: 'gfpgan',
   sharpenAlpha: 0.25,
   fmt:   'jpeg',
   tile:  512,
@@ -416,6 +416,14 @@ async function init() {
     $('devBadge').textContent = r.device.toUpperCase();
     setBadge('cfBadge',  r.models.gfpgan,    'GFPGAN');
     setBadge('datBadge', r.models.pro_dat,   'PRO DAT');
+    const proOpt = $('wfSel').querySelector('option[value="pro"]');
+    if (proOpt) proOpt.disabled = !r.models.pro_dat;
+    if (r.models.pro_dat) {
+      $('wfSel').value = 'pro';
+      S.workflow = 'pro';
+      $('gfpganControls').classList.add('hidden');
+      $('proControls').classList.remove('hidden');
+    }
     if (r.gemini_ready) $('gemBadge').textContent = '✦ Gemini ✓';
   } catch(e) { $('devBadge').textContent = 'OFFLINE'; }
 }
@@ -527,11 +535,12 @@ function renderItem(f) {
   el.className = 'fi'; el.id = `fi-${f.file_id}`;
   const kb   = (f.size / 1024).toFixed(0);
   const dims = f.dimensions[0] ? `${f.dimensions[0]}×${f.dimensions[1]}px` : '';
+  const safeName = escHtml(f.original_name || '');
   el.innerHTML = `
     <img class="fi-th" src="/api/thumb/${f.file_id}" alt=""
          onclick="window.open('/api/preview/${f.file_id}','_blank')" title="Ver original">
     <div class="fi-body">
-      <div class="fi-name" title="${f.original_name}">${f.original_name}</div>
+      <div class="fi-name" title="${safeName}">${safeName}</div>
       <div class="fi-meta">${kb} KB${dims ? ' · '+dims : ''}</div>
       <div class="fi-gem" id="gem-${f.file_id}">${S.gemKey ? '✦ En cola para análisis…' : ''}</div>
       <div class="fi-err-msg hidden" id="err-${f.file_id}"></div>
@@ -664,7 +673,11 @@ function addLog(level, msg) {
   logBody.scrollTop = logBody.scrollHeight;
 }
 
-function escHtml(s) { return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+function escHtml(s) {
+  return String(s ?? '').replace(/[&<>"']/g, c => ({
+    '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'
+  })[c]);
+}
 
 function updateProgress(job) {
   const done  = job.completed + job.errors;
@@ -727,8 +740,8 @@ function buildResults(job) {
     } else if (f.status === 'error' || f.status === 'cancelled') {
       const d = document.createElement('div');
       d.className = 'err-card';
-      d.innerHTML = `<div class="err-card-name">❌ ${f.original_name}</div>
-        <div>${f.error || 'Error desconocido'}</div>`;
+      d.innerHTML = `<div class="err-card-name">❌ ${escHtml(f.original_name || '')}</div>
+        <div>${escHtml(f.error || 'Error desconocido')}</div>`;
       grid.appendChild(d);
     }
   });
@@ -746,6 +759,7 @@ function makeCard(jobId, f) {
   const nd = f.out_size  ? `${f.out_size[0]}×${f.out_size[1]}`  : '?';
   const is4k = f.out_size && f.out_size[0] >= 3840;
   const cid  = `ba-${f.file_id}`;
+  const safeName = escHtml(f.original_name || '');
 
   card.innerHTML = `
     <div class="ba" id="${cid}">
@@ -760,7 +774,7 @@ function makeCard(jobId, f) {
       </div>
     </div>
     <div class="rc-info">
-      <div class="rc-name" title="${f.original_name}">${f.original_name}</div>
+      <div class="rc-name" title="${safeName}">${safeName}</div>
       <div class="rc-dims">${od} → <b>${nd}</b>${is4k ? ' · <span style="color:var(--green)">4K ✓</span>' : ''}</div>
       <div class="rc-foot">
         <span class="rc-time">⏱ ${f.elapsed}s</span>
